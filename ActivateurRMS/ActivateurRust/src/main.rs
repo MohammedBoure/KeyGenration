@@ -1,0 +1,635 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Duration;
+
+const DEFAULT_CLOUD_API_URL: &str = "http://qylad-server.duckdns.org:7002";
+const LOCAL_GENERATE_URL: &str = "http://127.0.0.1:45632/generate_key";
+const SERVICE_NAME: &str = "KeyGenService";
+
+type AppResult<T> = Result<T, String>;
+
+#[derive(Deserialize)]
+struct ServerStatus {
+    status: String,
+}
+
+#[derive(Deserialize)]
+struct GenerateResponse {
+    activation_key: String,
+}
+
+#[derive(Serialize)]
+struct GenerateRequest<'a> {
+    request_code: &'a str,
+    app_type: &'a str,
+    server_url: &'a str,
+}
+
+fn configured_cloud_url() -> String {
+    env::var("KEYGEN_CLOUD_API_URL").unwrap_or_else(|_| DEFAULT_CLOUD_API_URL.to_owned())
+}
+
+fn validate_cloud_url(url: &str) -> AppResult<String> {
+    let trimmed = url.trim().trim_end_matches('/');
+    if (trimmed.starts_with("http://") || trimmed.starts_with("https://"))
+        && !trimmed.chars().any(char::is_whitespace)
+    {
+        Ok(trimmed.to_owned())
+    } else {
+        Err("L'URL cloud doit commencer par http:// ou https://.".to_owned())
+    }
+}
+
+fn validate_request_code(value: &str) -> AppResult<String> {
+    let request_code = value.trim().to_ascii_uppercase();
+    if request_code.len() == 14
+        && request_code.as_bytes()[4] == b'-'
+        && request_code.as_bytes()[9] == b'-'
+    {
+        Ok(request_code)
+    } else {
+        Err("Format du code: XXXX-XXXX-XXXX.".to_owned())
+    }
+}
+
+fn cloud_status(cloud_url: &str, api_token: &str) -> AppResult<String> {
+    if api_token.trim().is_empty() {
+        return Err("Entrez le token API pour installer le service.".to_owned());
+    }
+    let url = format!("{cloud_url}/api/v1/server-status");
+    let response = ureq::get(&url)
+        .set("Authorization", &format!("Bearer {}", api_token.trim()))
+        .set("Content-Type", "application/json")
+        .timeout(Duration::from_secs(12))
+        .call()
+        .map_err(|error| format!("Verification cloud impossible: {error}"))?;
+    let status: ServerStatus = response
+        .into_json()
+        .map_err(|error| format!("Reponse cloud invalide: {error}"))?;
+    Ok(status.status)
+}
+
+fn generate_key(request_code: &str, app_type: &str, cloud_url: &str) -> AppResult<String> {
+    let payload = GenerateRequest {
+        request_code,
+        app_type,
+        server_url: cloud_url,
+    };
+    let response = ureq::post(LOCAL_GENERATE_URL)
+        .set("Content-Type", "application/json")
+        .timeout(Duration::from_secs(10))
+        .send_json(json!(payload))
+        .map_err(|error| format!("Service local indisponible: {error}"))?;
+    let response: GenerateResponse = response
+        .into_json()
+        .map_err(|error| format!("Reponse locale invalide: {error}"))?;
+    Ok(response.activation_key)
+}
+
+fn bundle_root() -> AppResult<PathBuf> {
+    if let Some(path) = env::var_os("ACTIVATEUR_BUNDLE_DIR") {
+        return Ok(PathBuf::from(path));
+    }
+    let executable = env::current_exe()
+        .map_err(|error| format!("Impossible de localiser l'application: {error}"))?;
+    executable
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "Dossier de l'application introuvable.".to_owned())
+}
+
+fn install_root() -> AppResult<PathBuf> {
+    env::var_os("ProgramFiles")
+        .map(PathBuf::from)
+        .map(|path| path.join("KeyGenRMS"))
+        .ok_or_else(|| "Variable ProgramFiles introuvable.".to_owned())
+}
+
+fn run_command(program: &Path, arguments: &[&str]) -> AppResult<()> {
+    let output = Command::new(program)
+        .args(arguments)
+        .output()
+        .map_err(|error| format!("Echec de lancement de {}: {error}", program.display()))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let details = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    Err(format!(
+        "Commande echouee ({}): {}",
+        program.display(),
+        details
+    ))
+}
+
+fn run_optional(program: &Path, arguments: &[&str]) {
+    let _ = Command::new(program).args(arguments).output();
+}
+
+fn install_service(cloud_url: &str, api_token: &str) -> AppResult<String> {
+    let status = cloud_status(cloud_url, api_token)?;
+    let source_root = bundle_root()?;
+    let source_service = source_root.join("KeyGenService").join("KeyGenService.exe");
+    let source_nssm = source_root.join("nssm").join("nssm.exe");
+    if !source_service.is_file() {
+        return Err(format!(
+            "Backend Rust manquant: {}",
+            source_service.display()
+        ));
+    }
+    if !source_nssm.is_file() {
+        return Err(format!("NSSM manquant: {}", source_nssm.display()));
+    }
+
+    let destination = install_root()?;
+    fs::create_dir_all(&destination)
+        .map_err(|error| format!("Creation du dossier impossible: {error}"))?;
+    let installed_service = destination.join("KeyGenService.exe");
+    let installed_nssm = destination.join("nssm.exe");
+
+    // Windows keeps a running executable locked; stop an existing instance before upgrading it.
+    run_optional(&source_nssm, &["stop", SERVICE_NAME, "confirm"]);
+    run_optional(&source_nssm, &["remove", SERVICE_NAME, "confirm"]);
+    fs::copy(&source_service, &installed_service)
+        .map_err(|error| format!("Copie de KeyGenService impossible: {error}"))?;
+    fs::copy(&source_nssm, &installed_nssm)
+        .map_err(|error| format!("Copie de NSSM impossible: {error}"))?;
+
+    let service_path = installed_service.to_string_lossy().to_string();
+    let app_directory = destination.to_string_lossy().to_string();
+    let cloud_setting = format!("KEYGEN_CLOUD_API_URL={cloud_url}");
+    let token_setting = format!("KEYGEN_API_SECRET_TOKEN={}", api_token.trim());
+
+    run_command(&installed_nssm, &["install", SERVICE_NAME, &service_path])?;
+    run_command(
+        &installed_nssm,
+        &["set", SERVICE_NAME, "AppDirectory", &app_directory],
+    )?;
+    run_command(
+        &installed_nssm,
+        &[
+            "set",
+            SERVICE_NAME,
+            "AppEnvironmentExtra",
+            &cloud_setting,
+            &token_setting,
+        ],
+    )?;
+    run_command(
+        &installed_nssm,
+        &["set", SERVICE_NAME, "Start", "SERVICE_AUTO_START"],
+    )?;
+    run_command(&installed_nssm, &["set", SERVICE_NAME, "AppNoConsole", "1"])?;
+    run_command(&installed_nssm, &["start", SERVICE_NAME])?;
+
+    let mode = if status.trim() == "1" {
+        "actif"
+    } else {
+        "maintenance"
+    };
+    Ok(format!("Service Rust installe et demarre. Cloud: {mode}."))
+}
+
+#[cfg(windows)]
+#[allow(unsafe_op_in_unsafe_fn)]
+mod gui {
+    use super::*;
+    use std::ptr::{null, null_mut};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::Graphics::Gdi::{COLOR_WINDOW, UpdateWindow};
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::Controls::EM_SETREADONLY;
+    use windows_sys::Win32::UI::Shell::{IsUserAnAdmin, ShellExecuteW};
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+
+    const ID_SERVER: i32 = 101;
+    const ID_TOKEN: i32 = 102;
+    const ID_APP_TYPE: i32 = 103;
+    const ID_CODE: i32 = 104;
+    const ID_KEY: i32 = 105;
+    const ID_INSTALL: i32 = 201;
+    const ID_GENERATE: i32 = 202;
+    const ID_ELEVATE: i32 = 203;
+
+    #[derive(Clone, Copy)]
+    struct Bounds {
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    }
+
+    impl Bounds {
+        const fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
+            Self {
+                x,
+                y,
+                width,
+                height,
+            }
+        }
+    }
+
+    struct Controls {
+        server: HWND,
+        token: HWND,
+        app_type: HWND,
+        code: HWND,
+        key: HWND,
+        status: HWND,
+    }
+
+    pub fn run() -> AppResult<()> {
+        unsafe {
+            let instance = GetModuleHandleW(null());
+            let class_name = wide("ActivateurRmsNativeWindow");
+            let window_class = WNDCLASSW {
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(window_proc),
+                hInstance: instance,
+                lpszClassName: class_name.as_ptr(),
+                hCursor: LoadCursorW(null_mut(), IDC_ARROW),
+                hbrBackground: (COLOR_WINDOW + 1) as _,
+                ..std::mem::zeroed()
+            };
+            if RegisterClassW(&window_class) == 0 {
+                return Err("Impossible d'enregistrer la fenetre.".to_owned());
+            }
+            let title = wide("Activateur RMS - Rust");
+            let window = CreateWindowExW(
+                0,
+                class_name.as_ptr(),
+                title.as_ptr(),
+                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                570,
+                475,
+                null_mut(),
+                null_mut(),
+                instance,
+                null(),
+            );
+            if window.is_null() {
+                return Err("Impossible de creer la fenetre.".to_owned());
+            }
+            ShowWindow(window, SW_SHOW);
+            UpdateWindow(window);
+
+            let mut message: MSG = std::mem::zeroed();
+            while GetMessageW(&mut message, null_mut(), 0, 0) > 0 {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn show_fatal_error(error: &str) {
+        unsafe {
+            message_box(null_mut(), "Activateur RMS", error);
+        }
+    }
+
+    unsafe extern "system" fn window_proc(
+        window: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        match message {
+            WM_CREATE => {
+                let controls = create_controls(window);
+                SetWindowLongPtrW(
+                    window,
+                    GWLP_USERDATA,
+                    Box::into_raw(Box::new(controls)) as _,
+                );
+                0
+            }
+            WM_COMMAND => {
+                let command = (wparam & 0xffff) as i32;
+                let controls = control_state(window);
+                if !controls.is_null() {
+                    match command {
+                        ID_INSTALL => install_clicked(window, &*controls),
+                        ID_GENERATE => generate_clicked(&*controls),
+                        ID_ELEVATE => elevation_clicked(window, &*controls),
+                        _ => {}
+                    }
+                }
+                0
+            }
+            WM_DESTROY => {
+                let controls = control_state(window);
+                if !controls.is_null() {
+                    drop(Box::from_raw(controls));
+                    SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+                }
+                PostQuitMessage(0);
+                0
+            }
+            _ => DefWindowProcW(window, message, wparam, lparam),
+        }
+    }
+
+    unsafe fn create_controls(window: HWND) -> Controls {
+        label(window, "Serveur Cloud API", 24, 20, 500, 22);
+        let server = edit(
+            window,
+            &configured_cloud_url(),
+            ID_SERVER,
+            Bounds::new(24, 44, 505, 27),
+            false,
+        );
+        label(
+            window,
+            "Token API (necessaire pour installation)",
+            24,
+            82,
+            500,
+            22,
+        );
+        let token = edit(window, "", ID_TOKEN, Bounds::new(24, 106, 505, 27), true);
+        label(window, "Logiciel", 24, 145, 130, 22);
+        let app_type = CreateWindowExW(
+            0,
+            wide("COMBOBOX").as_ptr(),
+            null(),
+            WS_CHILD | WS_VISIBLE | WS_VSCROLL | CBS_DROPDOWNLIST as u32,
+            24,
+            169,
+            230,
+            120,
+            window,
+            ID_APP_TYPE as _,
+            GetModuleHandleW(null()),
+            null(),
+        );
+        for item in ["Restaurant", "Lab", "Jewelry"] {
+            let item = wide(item);
+            SendMessageW(app_type, CB_ADDSTRING, 0, item.as_ptr() as _);
+        }
+        SendMessageW(app_type, CB_SETCURSEL, 0, 0);
+        label(window, "Code de demande", 278, 145, 250, 22);
+        let code = edit(window, "", ID_CODE, Bounds::new(278, 169, 251, 27), false);
+        label(window, "Cle d'activation", 24, 214, 500, 22);
+        let key = edit(window, "", ID_KEY, Bounds::new(24, 238, 505, 27), false);
+        SendMessageW(key, EM_SETREADONLY, 1, 0);
+        button(
+            window,
+            "Installer / Mettre a jour",
+            ID_INSTALL,
+            24,
+            287,
+            245,
+            38,
+        );
+        button(window, "Generer la cle", ID_GENERATE, 284, 287, 245, 38);
+        button(
+            window,
+            "Relancer comme administrateur",
+            ID_ELEVATE,
+            24,
+            338,
+            505,
+            34,
+        );
+        let status = label(
+            window,
+            "Pret. Installez le service Rust puis generez les cles.",
+            24,
+            391,
+            510,
+            35,
+        );
+        Controls {
+            server,
+            token,
+            app_type,
+            code,
+            key,
+            status,
+        }
+    }
+
+    unsafe fn install_clicked(window: HWND, controls: &Controls) {
+        if IsUserAnAdmin() == 0 {
+            set_text(
+                controls.status,
+                "L'installation exige les droits administrateur. Relancez l'application.",
+            );
+            return;
+        }
+        let cloud_url = match validate_cloud_url(&get_text(controls.server)) {
+            Ok(url) => url,
+            Err(error) => {
+                set_text(controls.status, &error);
+                return;
+            }
+        };
+        let token = get_text(controls.token);
+        set_text(
+            controls.status,
+            "Verification cloud et installation en cours...",
+        );
+        UpdateWindow(controls.status);
+        match install_service(&cloud_url, &token) {
+            Ok(result) => set_text(controls.status, &result),
+            Err(error) => {
+                set_text(controls.status, &error);
+                message_box(window, "Installation impossible", &error);
+            }
+        }
+    }
+
+    unsafe fn generate_clicked(controls: &Controls) {
+        let cloud_url = match validate_cloud_url(&get_text(controls.server)) {
+            Ok(url) => url,
+            Err(error) => {
+                set_text(controls.status, &error);
+                return;
+            }
+        };
+        let request_code = match validate_request_code(&get_text(controls.code)) {
+            Ok(code) => code,
+            Err(error) => {
+                set_text(controls.status, &error);
+                return;
+            }
+        };
+        let selection = SendMessageW(controls.app_type, CB_GETCURSEL, 0, 0) as usize;
+        let app_type = ["Restaurant", "Lab", "Jewelry"]
+            .get(selection)
+            .copied()
+            .unwrap_or("Restaurant");
+        set_text(controls.status, "Generation en cours...");
+        UpdateWindow(controls.status);
+        match generate_key(&request_code, app_type, &cloud_url) {
+            Ok(key) => {
+                set_text(controls.key, &key);
+                set_text(
+                    controls.status,
+                    "Cle generee et mise en file de synchronisation.",
+                );
+            }
+            Err(error) => set_text(controls.status, &error),
+        }
+    }
+
+    unsafe fn elevation_clicked(window: HWND, controls: &Controls) {
+        let executable = match env::current_exe() {
+            Ok(path) => path,
+            Err(error) => {
+                set_text(controls.status, &format!("Relance impossible: {error}"));
+                return;
+            }
+        };
+        let verb = wide("runas");
+        let executable = wide(&executable.to_string_lossy());
+        let outcome = ShellExecuteW(
+            window,
+            verb.as_ptr(),
+            executable.as_ptr(),
+            null(),
+            null(),
+            SW_SHOWNORMAL,
+        ) as isize;
+        if outcome > 32 {
+            DestroyWindow(window);
+        } else {
+            set_text(controls.status, "Elevation refusee ou impossible.");
+        }
+    }
+
+    unsafe fn control_state(window: HWND) -> *mut Controls {
+        GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Controls
+    }
+
+    unsafe fn label(window: HWND, text: &str, x: i32, y: i32, width: i32, height: i32) -> HWND {
+        CreateWindowExW(
+            0,
+            wide("STATIC").as_ptr(),
+            wide(text).as_ptr(),
+            WS_CHILD | WS_VISIBLE,
+            x,
+            y,
+            width,
+            height,
+            window,
+            null_mut(),
+            GetModuleHandleW(null()),
+            null(),
+        )
+    }
+
+    unsafe fn edit(window: HWND, text: &str, id: i32, bounds: Bounds, password: bool) -> HWND {
+        let mut style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL as u32;
+        if password {
+            style |= ES_PASSWORD as u32;
+        }
+        CreateWindowExW(
+            WS_EX_CLIENTEDGE,
+            wide("EDIT").as_ptr(),
+            wide(text).as_ptr(),
+            style,
+            bounds.x,
+            bounds.y,
+            bounds.width,
+            bounds.height,
+            window,
+            id as _,
+            GetModuleHandleW(null()),
+            null(),
+        )
+    }
+
+    unsafe fn button(
+        window: HWND,
+        text: &str,
+        id: i32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> HWND {
+        CreateWindowExW(
+            0,
+            wide("BUTTON").as_ptr(),
+            wide(text).as_ptr(),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            x,
+            y,
+            width,
+            height,
+            window,
+            id as _,
+            GetModuleHandleW(null()),
+            null(),
+        )
+    }
+
+    unsafe fn get_text(control: HWND) -> String {
+        let length = GetWindowTextLengthW(control);
+        let mut buffer = vec![0; (length + 1) as usize];
+        GetWindowTextW(control, buffer.as_mut_ptr(), length + 1);
+        String::from_utf16_lossy(&buffer[..length as usize])
+    }
+
+    unsafe fn set_text(control: HWND, value: &str) {
+        SetWindowTextW(control, wide(value).as_ptr());
+    }
+
+    unsafe fn message_box(window: HWND, title: &str, value: &str) {
+        MessageBoxW(
+            window,
+            wide(value).as_ptr(),
+            wide(title).as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+
+    fn wide(value: &str) -> Vec<u16> {
+        value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+}
+
+#[cfg(windows)]
+fn main() {
+    if let Err(error) = gui::run() {
+        gui::show_fatal_error(&error);
+    }
+}
+
+#[cfg(not(windows))]
+fn main() {
+    eprintln!("Activateur RMS desktop application is available on Windows only.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_supported_cloud_urls() {
+        assert_eq!(
+            validate_cloud_url("https://keys.example.test/"),
+            Ok("https://keys.example.test".to_owned())
+        );
+        assert!(validate_cloud_url("keys.example.test").is_err());
+    }
+
+    #[test]
+    fn normalizes_request_codes() {
+        assert_eq!(
+            validate_request_code("f81a-67a7-c6aa"),
+            Ok("F81A-67A7-C6AA".to_owned())
+        );
+        assert!(validate_request_code("f81a67a7c6aa").is_err());
+    }
+}

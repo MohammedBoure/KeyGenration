@@ -20,6 +20,8 @@ dist-ssr
 *.db
 __pycache__/
 target/
+/ActivateurRMS/KeyGenServiceSC/build/
+/ActivateurRMS/KeyGenServiceSC/*.spec
 
 # Editor directories and files
 .vscode/*

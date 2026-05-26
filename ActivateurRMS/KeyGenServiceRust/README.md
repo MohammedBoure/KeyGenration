@@ -1,7 +1,7 @@
 # KeyGenService Rust Backend
 
-This is the lightweight local backend used by the Flet interface. It exposes
-the same endpoint as the legacy Python service:
+This is the lightweight local backend used by the native Rust interface. It
+exposes the local key-generation endpoint:
 
 ```text
 POST http://127.0.0.1:45632/generate_key
@@ -15,8 +15,8 @@ the client executable.
 ## Build
 
 ```powershell
-cd .\KeyGenServiceRust
-cargo build --release
+cd .\ActivateurRMS
+cargo build --release -p keygen-service
 ```
 
 The Windows executable is written to:
@@ -25,15 +25,15 @@ The Windows executable is written to:
 target\release\KeyGenService.exe
 ```
 
-Place that executable in `..\KeyGenService\KeyGenService.exe` for packaging
-with the user interface.
+Place that executable in `KeyGenService\KeyGenService.exe` for packaging with
+the user interface.
 
 ## Configuration
 
 Set these environment variables for the Windows service:
 
 ```text
-KEYGEN_CLOUD_API_URL=http://qylad-server.duckdns.org:7002
+KEYGEN_CLOUD_API_URL=https://activation.example.com
 KEYGEN_API_SECRET_TOKEN=<cloud-api-token>
 ```
 
