@@ -83,6 +83,18 @@ https://your-api-host/dashboard
 
 أدخل `KEYGEN_API_SECRET_TOKEN` لقراءة السجلات أو تغيير وضع التوليد.
 
+للمراقبة المباشرة من جهاز الإدارة دون نشر Cloud API، شغل لوحة FastAPI
+المحلية التي تتصل بنفس قاعدة PostgreSQL:
+
+```powershell
+cd .\services\cloud-api
+python .\fastapi_app.py
+```
+
+ثم افتح `http://127.0.0.1:8080/`. راجع
+[دليل لوحة المراقبة المحلية](local-dashboard.md) لإعداد `.env` ومسارات
+الخدمة واحتياطات الأمان.
+
 ## قائمة تحقق للنشر
 
 1. جهز `.env` للخادم داخل `services/cloud-api/` فقط.

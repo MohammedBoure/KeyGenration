@@ -79,3 +79,19 @@ Success:
 ```
 
 During maintenance the route returns HTTP `503` and does not generate a key.
+
+## Local FastAPI Monitoring Dashboard
+
+Run `python .\fastapi_app.py` from `services/cloud-api` to use a local-only
+dashboard backed directly by the configured PostgreSQL database.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /` | Browser dashboard |
+| `GET /health` | Web service health response |
+| `GET /api/status` | Reads `server_control.status` |
+| `PUT /api/status` | Accepts `{"status":"0"}` or `{"status":"1"}` |
+| `GET /api/activation-logs?limit=100` | Reads the latest activation records |
+
+By default it accepts browser requests only from the local computer. It is
+separate from the bearer-token protected Cloud API used by the Rust service.
