@@ -1,86 +1,64 @@
-# Activateur RMS 2025 - Restaurant Management System Key Generator
+# Activateur RMS
 
-**The next generation of activation generators for Restaurant Management Systems.**
-A complete system: Elegant UI + Local backend server + Instant remote control via Supabase.
+Activation key management with a Flet user interface, a small local Rust
+service, and a PostgreSQL-backed cloud API.
 
-[![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-blue)](https://python.org)
-[![Flet UI](https://img.shields.io/badge/Flet-Modern_UI-orange)](https://flet.dev)
-[![Supabase](https://img.shields.io/badge/Supabase-Remote_Control-green)](https://supabase.com)
-[![Status](https://img.shields.io/badge/Status-Active_2025-success)](https://github.com)
+## Architecture
 
-## Final Project Structure (As it should be)
-
+```text
+Activateur.py (Flet UI)
+        |
+        | POST http://127.0.0.1:45632/generate_key
+        v
+KeyGenServiceRust / KeyGenService.exe
+        |
+        | /api/v1/server-status and /api/v1/activation-logs
+        v
+server.py (cloud API) ---> PostgreSQL keygen_restaurant
 ```
+
+The desktop executable never receives PostgreSQL credentials. PostgreSQL is
+accessed only by the cloud API, using SSL and environment variables.
+
+## Project Layout
+
+```text
 ActivateurRMS/
-├── ActivateurRMS.py              Main interface + Auto-installation (Flet)
-├── installer.py                  Manual service installation/uninstallation tool (Optional)
-├── icon.png                      Official icon (282 KB)
-├── nssm/                         NSSM 64-bit tool (To convert the program to a service)
-├── KeyGenService/                Example bundled version (For demonstration only)
-│   └── KeyGenService.exe         Dummy file (0 bytes) - To illustrate the final form
-└── KeyGenServiceSC/              Actual source code (This is where the server is compiled)
-├── KeyGenService.py              Original code (Flask API + Supabase)
-└── README.md                     Internal server explanation
-```
-## Complete Build Process (Step-by-step) - For Developers and Distributors
-
-### 1. Building the Backend Server (KeyGenService.exe)
-
-```bash
-cd KeyGenServiceSC
-
-pyinstaller --onedir --noconsole --icon=../icon.png --name "KeyGenService" KeyGenService.py
-
-```
-Output: dist\KeyGenService
-Place the entire folder in: KeyGenService\
-
-### 2. Building the Main Interface (Activateur RMS.exe)
-
-```bash
-# From the root directory
-pyinstaller --onefile --windowed --noconsole --icon=icon.png --name "Activateur RMS" ActivateurRMS.py
+|-- Activateur.py                 Flet interface and Windows service setup
+|-- installer.py                  Manual NSSM service installer/upgrader
+|-- server.py                     PostgreSQL-backed cloud API and dashboard
+|-- server_requirements.txt       Cloud API Python dependencies
+|-- KeyGenServiceRust/            Preferred local backend source
+|-- KeyGenService/KeyGenService.exe  Packaged local service executable
+|-- KeyGenServiceSC/              Legacy Python backend source
+`-- nssm/nssm.exe                Windows service wrapper
 ```
 
-### 3. (Optional) Manual Usage of installer.py
+## Build The Rust Backend
 
-```bash
-python installer.py
+Rust replaces the PyInstaller backend executable. It implements the same
+`POST /generate_key` endpoint used by the interface, including local queueing,
+remote maintenance status, and cloud log upload.
+
+```powershell
+cd .\KeyGenServiceRust
+cargo test
+cargo build --release
+Copy-Item .\target\release\KeyGenService.exe ..\KeyGenService\KeyGenService.exe
 ```
 
-### How it works for the client:
+The release profile enables size-oriented optimization, LTO, symbol stripping,
+and abort-on-panic so the distributed executable remains compact.
 
-1.  `Activateur RMS.exe` is opened.
-2.  Internet and server status (Supabase) are checked.
-3.  If the system is activated (`status = "1"`):
-    *   Everything is copied to `C:\keygen_exe`.
-    *   `KeyGenService.exe` is installed as a Windows service (using NSSM).
-    *   The elegant generation interface is launched.
+## Run The Cloud API
 
-Every key generated is immediately uploaded to Supabase.
-
-### Full Remote Control
-
-**Supabase Table:** `server_control`
-**Row:** `id = 1`
-**Field:** `status`
-*   `"1"` → Activated (Generates keys)
-*   `"0"` → Immediately deactivated (globally)
-
-## PostgreSQL-backed API Server
-
-`server.py` stores the control status and activation logs in PostgreSQL. It
-defaults to `sw4.duckdns.org:9005/keygen_restaurant` and requires SSL.
-Secrets must be supplied as environment variables and must not be committed.
-
-Install the server dependencies:
+Install dependencies:
 
 ```powershell
 python -m pip install -r .\server_requirements.txt
 ```
 
-Set configuration before running the API server. See `.env.example` for all
-available variables.
+Set secrets outside git, then start the API:
 
 ```powershell
 $env:PGPASSWORD = "<database-password>"
@@ -88,11 +66,40 @@ $env:KEYGEN_API_SECRET_TOKEN = "<api-token>"
 python .\server.py
 ```
 
-For an existing local `cloud_database.db`, run the one-time idempotent import
-before starting the web server:
+The default database endpoint is
+`sw4.duckdns.org:9005/keygen_restaurant` with `PGSSLMODE=require`. Override
+the `PG*` variables or use `DATABASE_URL` where needed; see `.env.example`.
+
+For an existing SQLite database, import it once before starting service use:
 
 ```powershell
 $env:PGPASSWORD = "<database-password>"
-$env:KEYGEN_API_SECRET_TOKEN = "<api-token>"
 python .\server.py --migrate-sqlite .\cloud_database.db
 ```
+
+The import is idempotent by activation log id.
+
+## Install The Local Service
+
+The local service sends data to the cloud API backed by PostgreSQL:
+
+```powershell
+$env:KEYGEN_CLOUD_API_URL = "http://qylad-server.duckdns.org:7002"
+$env:KEYGEN_API_SECRET_TOKEN = "<api-token>"
+python .\installer.py
+```
+
+`installer.py` installs `KeyGenService\KeyGenService.exe` through NSSM and
+stores the cloud API settings in that service environment.
+
+## Legacy Backend
+
+`KeyGenServiceSC\KeyGenService.py` remains available as a Python compatibility
+implementation. It uses the same cloud API environment variables and no
+longer connects to Supabase. New packages should use the Rust executable.
+
+## Secrets
+
+Do not commit `.env` files, PostgreSQL passwords, or API tokens. A desktop
+service token should be scoped and rotated if it is distributed outside a
+trusted environment.

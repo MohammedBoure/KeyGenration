@@ -69,10 +69,15 @@ if __name__ == "__main__" and os.name == "nt" and not is_windows_admin():
 
 # ====== إعدادات التطبيق ======
 SERVICE_NAME = "KeyGenService"
-APP_PATH = r"C:\keygen_exe\main.exe"
-APP_DIR = r"C:\keygen_exe"
+APP_PATH = r"C:\KeyGenService\KeyGenService.exe"
+APP_DIR = r"C:\KeyGenService"
 NSSM_DIR = r"C:\nssm"
 NSSM_PATH = os.path.join(NSSM_DIR, "nssm.exe")
+SOURCE_APP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "KeyGenService")
+CLOUD_API_URL = os.environ.get(
+    "KEYGEN_CLOUD_API_URL", "http://qylad-server.duckdns.org:7002"
+).rstrip("/")
+API_SECRET_TOKEN = os.environ.get("KEYGEN_API_SECRET_TOKEN", "")
 
 # ====== دالة تشغيل الأوامر ======
 def run_cmd(cmd, description=None):
@@ -107,21 +112,26 @@ def service_exists(name):
 # ====== نسخ المجلدات ======
 def copy_folder(src, dst):
     if os.path.exists(dst):
-        logger.warning(f"Folder already exists: {dst}")
-    else:
-        logger.info(f"Copying {src} → {dst}")
-        shutil.copytree(src, dst)
+        logger.info(f"Updating existing folder: {dst}")
+        shutil.copytree(src, dst, dirs_exist_ok=True)
+        return
+    logger.info(f"Copying {src} to {dst}")
+    shutil.copytree(src, dst)
 
 # ====== تثبيت الخدمة ======
 def install_service():
     logger.info("=== Installing KeyGenService ===")
 
+    if not API_SECRET_TOKEN:
+        logger.error("Set KEYGEN_API_SECRET_TOKEN before installing the service.")
+        return False
+
     # نسخ الملفات
-    copy_folder("keygen_exe", APP_DIR)
+    copy_folder(SOURCE_APP_DIR, APP_DIR)
     copy_folder("nssm", NSSM_DIR)
 
     if not os.path.isfile(APP_PATH):
-        logger.error(f"main.exe not found: {APP_PATH}")
+        logger.error(f"KeyGenService.exe not found: {APP_PATH}")
         return False
 
     if not os.path.isfile(NSSM_PATH):
@@ -136,6 +146,12 @@ def install_service():
     if not run_cmd([NSSM_PATH, "install", SERVICE_NAME, APP_PATH], "Installing service"):
         return False
     if not run_cmd([NSSM_PATH, "set", SERVICE_NAME, "AppDirectory", APP_DIR], "Setting AppDirectory"):
+        return False
+    if not run_cmd([
+        NSSM_PATH, "set", SERVICE_NAME, "AppEnvironmentExtra",
+        f"KEYGEN_CLOUD_API_URL={CLOUD_API_URL}",
+        f"KEYGEN_API_SECRET_TOKEN={API_SECRET_TOKEN}"
+    ], "Setting cloud API environment"):
         return False
     if not run_cmd([NSSM_PATH, "set", SERVICE_NAME, "Start", "SERVICE_AUTO_START"], "Setting auto-start"):
         return False
@@ -166,7 +182,7 @@ def remove_service():
         logger.info("Service not found.")
 
     # حذف المجلدات (اختياري)
-    confirm = input("Delete C:\\keygen_exe and C:\\nssm folders? (y/N): ").strip().lower()
+    confirm = input("Delete C:\\KeyGenService and C:\\nssm folders? (y/N): ").strip().lower()
     if confirm == 'y':
         for path in [APP_DIR, NSSM_DIR]:
             if os.path.exists(path):

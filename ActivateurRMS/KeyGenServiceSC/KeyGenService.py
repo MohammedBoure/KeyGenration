@@ -9,8 +9,11 @@ from datetime import datetime
 from flask import Flask, request, jsonify
 
 # ---------------------------------------------------
-APP_SECRET_KEY = "RestaurantManagement"
-
+APP_SECRETS = {
+    "Restaurant": "RestaurantManagement",
+    "Lab": "LabInventoryManagement",
+    "Jewelry": "JewelryManagement"
+}
 SAVE_PATH_1 = r"C:\key_storage\generated_keys.txt"
 
 base_dir = os.path.join(os.getenv('PROGRAMDATA'), 'SystemLogs')
@@ -22,10 +25,10 @@ UPLOADED_LOG = os.path.join(base_dir, 'uploaded.log')
 MAINTENANCE_FILE = os.path.join(base_dir, "MAINTENANCE.txt")
 
 
-SUPABASE_URL = "https://xlmphvxehdomywigsrhq.supabase.co"
-SUPABASE_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhsbXBodnhlaGRvbXl3aWdzcmhxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NDU1OTM1NiwiZXhwIjoyMDcwMTM1MzU2fQ.pYm02fArrbUc8UjmiFb3Qrc4z3RntGrM-DEmMdhPyGA"
-TABLE_NAME = "activation_logs"
-CONTROL_TABLE = "server_control"
+API_BASE_URL = os.environ.get(
+    "KEYGEN_CLOUD_API_URL", "http://qylad-server.duckdns.org:7002"
+).rstrip("/")
+API_SECRET_TOKEN = os.environ.get("KEYGEN_API_SECRET_TOKEN", "")
 
 app = Flask(__name__)
 
@@ -40,34 +43,32 @@ if os.path.exists(MAINTENANCE_FILE):
 # ---------------------------------------------------
 def is_internet_available():
     try:
-        requests.get("https://httpbin.org/ip", timeout=3)
+        requests.get("https://www.google.com", timeout=5)
         return True
     except:
         return False
 
 # ---------------------------------------------------
-def upload_to_supabase(records):
+def upload_to_server(records):
     if not records:
         return True
 
-    url = f"{SUPABASE_URL}/rest/v1/{TABLE_NAME}"
+    url = f"{API_BASE_URL}/api/v1/activation-logs"
     headers = {
-        "apikey": SUPABASE_API_KEY,
-        "Authorization": f"Bearer {SUPABASE_API_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates"
+        "Authorization": f"Bearer {API_SECRET_TOKEN}",
+        "Content-Type": "application/json"
     }
 
     try:
         response = requests.post(url, json=records, headers=headers, timeout=10)
         if response.status_code in (200, 201):
-            print(f"[Supabase] Uploaded {len(records)} records successfully.")
+            print(f"[Cloud API] Uploaded {len(records)} records successfully.")
             return True
         else:
-            print(f"[Supabase] Upload failed: {response.status_code} - {response.text}")
+            print(f"[Cloud API] Upload failed: {response.status_code} - {response.text}")
             return False
     except Exception as e:
-        print(f"[Supabase] Upload error: {e}")
+        print(f"[Cloud API] Upload error: {e}")
         return False
 
 # ---------------------------------------------------
@@ -96,16 +97,16 @@ def check_remote_control():
     if not is_internet_available():
         return
 
-    url = f"{SUPABASE_URL}/rest/v1/{CONTROL_TABLE}?select=status&id=eq.1"
+    url = f"{API_BASE_URL}/api/v1/server-status"
     headers = {
-        "apikey": SUPABASE_API_KEY,
-        "Authorization": f"Bearer {SUPABASE_API_KEY}"
+        "Authorization": f"Bearer {API_SECRET_TOKEN}",
+        "Content-Type": "application/json"
     }
 
     try:
         response = requests.get(url, headers=headers, timeout=12)
         if response.status_code == 200 and response.json():
-            current_status = response.json()[0].get("status", "").strip()
+            current_status = str(response.json().get("status", "")).strip()
             
             if current_status == "0" and last_status != "0":
                 is_maintenance = True
@@ -154,16 +155,16 @@ def background_uploader():
             continue
 
         print(f"[Background] Found {len(pending)} pending records. Uploading...")
-        supabase_records = []
+        api_records = []
         for item in pending:
-            supabase_records.append({
+            api_records.append({
                 "request_code": item["request_code"],
                 "activation_key": item["activation_key"],
                 "generated_at": item["timestamp"],
                 "device_ip": item.get("ip", "unknown")
             })
 
-        if upload_to_supabase(supabase_records):
+        if upload_to_server(api_records):
             for item in pending:
                 log_uploaded(item["request_code"], item["activation_key"])
             save_pending_uploads([])
@@ -172,8 +173,10 @@ def background_uploader():
             print("[Background] Upload failed. Will retry later.")
 
 # ---------------------------------------------------
-def generate_activation_key(request_code):
-    data_to_hash = f"{request_code}::{APP_SECRET_KEY}"
+def generate_activation_key(request_code, app_type="Restaurant"):
+    secret_key = APP_SECRETS.get(app_type, APP_SECRETS["Restaurant"])
+
+    data_to_hash = f"{request_code}::{secret_key}"
     hasher = hashlib.sha256()
     hasher.update(data_to_hash.encode('utf-8'))
     full_hash = hasher.hexdigest().upper()
@@ -210,6 +213,8 @@ def save_key_to_files(request_code, activation_key, client_ip="unknown"):
 # ---------------------------------------------------
 @app.route('/generate_key', methods=['POST'])
 def api_generate_key():
+    global API_BASE_URL
+
     if is_maintenance or os.path.exists(MAINTENANCE_FILE):
         return jsonify({
             "error": "Server is under maintenance. Key generation is temporarily disabled.",
@@ -223,19 +228,32 @@ def api_generate_key():
     if not data or 'request_code' not in data:
         return jsonify({"error": "Missing 'request_code' in JSON body"}), 400
 
+    requested_server_url = str(data.get('server_url', '')).strip().rstrip('/')
+    if requested_server_url:
+        if not requested_server_url.startswith(('http://', 'https://')):
+            return jsonify({"error": "server_url must use http:// or https://"}), 400
+        API_BASE_URL = requested_server_url
+
     request_code = data['request_code'].strip().upper()
+
+    # جلب نوع البرنامج من الطلب (إذا لم يتم إرساله، سيعتبره 'Restaurant' كافتراضي)
+    app_type = data.get('app_type', 'Restaurant')
+
     client_ip = request.remote_addr
 
     if len(request_code) != 14 or request_code[4] != '-' or request_code[9] != '-':
         return jsonify({"error": "Invalid request_code format. Expected 'XXXX-XXXX-XXXX'."}), 400
 
     try:
-        activation_key = generate_activation_key(request_code)
+        # تمرير نوع البرنامج إلى دالة التوليد لضمان استخدام الكلمة السرية الصحيحة
+        activation_key = generate_activation_key(request_code, app_type)
+
         save_key_to_files(request_code, activation_key, client_ip)
 
         return jsonify({
             "request_code": request_code,
             "activation_key": activation_key,
+            "app_type": app_type,  # إرجاع نوع البرنامج في الرد للتأكيد
             "status": "generated_and_queued"
         }), 200
 
@@ -252,7 +270,7 @@ if __name__ == "__main__":
     print(f"Primary log: {SAVE_PATH_1}")
     print(f"Backup + Queue: {SAVE_PATH_2}")
     print(f"Pending uploads: {PENDING_UPLOADS}")
-    print(f"Control: {CONTROL_TABLE} → status='1' (active), '0' (maintenance)")
+    print(f"Cloud API: {API_BASE_URL} (Checking status & uploading logs)")
 
     uploader_thread = threading.Thread(target=background_uploader, daemon=True)
     controller_thread = threading.Thread(target=background_controller, daemon=True)
