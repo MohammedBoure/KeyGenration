@@ -7,7 +7,7 @@ This crate provides the native Windows Rust desktop program.
 - Display the activation UI for `Restaurant`, `Lab`, and `Jewelry`.
 - Verify the cloud API credentials before setup.
 - Install or upgrade `KeyGenService.exe` with NSSM.
-- Set the service cloud URL and bearer token environment.
+- Read package settings from `.env` and write filtered service settings.
 - Call the local Rust service to generate activation keys.
 
 Use an HTTPS cloud API address in production so the bearer token and
@@ -28,7 +28,11 @@ Package `ActivateurRMS.exe` alongside these runtime assets:
 ActivateurRMS.exe
 KeyGenService\KeyGenService.exe
 nssm\nssm.exe
+.env
 ```
+
+Create `.env` from `client.env.example`. The installed service receives only
+the client runtime settings and never PostgreSQL connection values.
 
 Run `ActivateurRMS.exe` as administrator when installing or updating the
 Windows service. Generation itself does not require elevation once the

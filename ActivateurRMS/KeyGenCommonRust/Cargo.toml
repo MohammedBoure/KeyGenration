@@ -1,0 +1,9 @@
+[package]
+name = "keygen-common"
+version = "0.1.0"
+edition = "2024"
+description = "Shared runtime configuration for Activateur RMS clients"
+
+[lib]
+name = "keygen_common"
+path = "src/lib.rs"

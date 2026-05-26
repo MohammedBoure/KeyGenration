@@ -27,13 +27,15 @@ accessed only by the hosted API over SSL-configured database connections.
 ActivateurRMS/
 |-- Cargo.toml                       Rust client workspace
 |-- ActivateurRust/                  Native Windows UI/setup source
+|-- KeyGenCommonRust/                Shared .env configuration parser
 |-- KeyGenServiceRust/               Local service source
 |-- ActivateurRMS.exe                Packaged native UI executable
 |-- KeyGenService/KeyGenService.exe  Packaged service executable
 |-- nssm/nssm.exe                    Windows service wrapper
 |-- server.py                        PostgreSQL cloud API/dashboard
 |-- server_requirements.txt          Cloud API Python dependencies
-`-- .env.example                     Server configuration example
+|-- .env.example                     Cloud server configuration example
+`-- client.env.example               Desktop package configuration example
 ```
 
 The Python cloud process is intentionally server-side only. The distributed
@@ -55,13 +57,19 @@ symbol stripping, size optimization, and abort-on-panic behavior.
 
 ## Package And Install
 
-Distribute these three runtime assets together:
+Distribute these runtime assets together:
 
 ```text
 ActivateurRMS.exe
 KeyGenService\KeyGenService.exe
 nssm\nssm.exe
+.env
 ```
+
+Create the distributed `.env` from `client.env.example`; it contains the API
+URL and API token, never PostgreSQL credentials. `ActivateurRMS.exe` reads it
+from its own folder, preloads the setup fields, and writes a filtered `.env`
+beside the installed Rust service.
 
 Start `ActivateurRMS.exe`, enter the cloud API URL and API token, then choose
 `Installer / Mettre a jour`. The app checks API access, copies the local Rust
@@ -80,8 +88,8 @@ python -m pip install -r .\server_requirements.txt
 Set secrets outside git, then start the API:
 
 ```powershell
-$env:PGPASSWORD = "<database-password>"
-$env:KEYGEN_API_SECRET_TOKEN = "<api-token>"
+Copy-Item .\.env.example .\.env
+# Edit .env with the PostgreSQL password and API token on the server only.
 python .\server.py
 ```
 
@@ -92,7 +100,6 @@ the `PG*` variables or use `DATABASE_URL` where needed; see `.env.example`.
 For an existing SQLite database, import it once before service use:
 
 ```powershell
-$env:PGPASSWORD = "<database-password>"
 python .\server.py --migrate-sqlite .\cloud_database.db
 ```
 

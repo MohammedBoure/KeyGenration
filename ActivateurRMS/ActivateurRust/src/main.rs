@@ -1,5 +1,6 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+use keygen_common::{APP_TYPES, RuntimeEnvironment, env_assignment};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::env;
@@ -11,6 +12,13 @@ use std::time::Duration;
 const DEFAULT_CLOUD_API_URL: &str = "http://qylad-server.duckdns.org:7002";
 const LOCAL_GENERATE_URL: &str = "http://127.0.0.1:45632/generate_key";
 const SERVICE_NAME: &str = "KeyGenService";
+const SERVICE_ENV_OPTIONS: [&str; 5] = [
+    "KEYGEN_LISTEN_ADDRESS",
+    "KEYGEN_DATA_DIR",
+    "KEYGEN_PRIMARY_LOG",
+    "KEYGEN_STATUS_INTERVAL_SECONDS",
+    "KEYGEN_UPLOAD_INTERVAL_SECONDS",
+];
 
 type AppResult<T> = Result<T, String>;
 
@@ -32,7 +40,22 @@ struct GenerateRequest<'a> {
 }
 
 fn configured_cloud_url() -> String {
-    env::var("KEYGEN_CLOUD_API_URL").unwrap_or_else(|_| DEFAULT_CLOUD_API_URL.to_owned())
+    configured_value("KEYGEN_CLOUD_API_URL").unwrap_or_else(|| DEFAULT_CLOUD_API_URL.to_owned())
+}
+
+fn configured_api_token() -> String {
+    configured_value("KEYGEN_API_SECRET_TOKEN").unwrap_or_default()
+}
+
+fn configured_value(name: &str) -> Option<String> {
+    RuntimeEnvironment::load()
+        .ok()
+        .and_then(|environment| environment.value(name))
+}
+
+fn runtime_environment() -> AppResult<RuntimeEnvironment> {
+    RuntimeEnvironment::load()
+        .map_err(|error| format!("Lecture du fichier .env impossible: {error}"))
 }
 
 fn validate_cloud_url(url: &str) -> AppResult<String> {
@@ -131,6 +154,20 @@ fn run_optional(program: &Path, arguments: &[&str]) {
     let _ = Command::new(program).args(arguments).output();
 }
 
+fn service_environment_contents(cloud_url: &str, api_token: &str) -> AppResult<String> {
+    let source_environment = runtime_environment()?;
+    let mut contents =
+        "# Generated client service settings. Do not add PostgreSQL credentials here.\n".to_owned();
+    contents.push_str(&env_assignment("KEYGEN_CLOUD_API_URL", cloud_url));
+    contents.push_str(&env_assignment("KEYGEN_API_SECRET_TOKEN", api_token.trim()));
+    for name in SERVICE_ENV_OPTIONS {
+        if let Some(value) = source_environment.value(name) {
+            contents.push_str(&env_assignment(name, &value));
+        }
+    }
+    Ok(contents)
+}
+
 fn install_service(cloud_url: &str, api_token: &str) -> AppResult<String> {
     let status = cloud_status(cloud_url, api_token)?;
     let source_root = bundle_root()?;
@@ -159,26 +196,19 @@ fn install_service(cloud_url: &str, api_token: &str) -> AppResult<String> {
         .map_err(|error| format!("Copie de KeyGenService impossible: {error}"))?;
     fs::copy(&source_nssm, &installed_nssm)
         .map_err(|error| format!("Copie de NSSM impossible: {error}"))?;
+    fs::write(
+        destination.join(".env"),
+        service_environment_contents(cloud_url, api_token)?,
+    )
+    .map_err(|error| format!("Ecriture du fichier .env du service impossible: {error}"))?;
 
     let service_path = installed_service.to_string_lossy().to_string();
     let app_directory = destination.to_string_lossy().to_string();
-    let cloud_setting = format!("KEYGEN_CLOUD_API_URL={cloud_url}");
-    let token_setting = format!("KEYGEN_API_SECRET_TOKEN={}", api_token.trim());
 
     run_command(&installed_nssm, &["install", SERVICE_NAME, &service_path])?;
     run_command(
         &installed_nssm,
         &["set", SERVICE_NAME, "AppDirectory", &app_directory],
-    )?;
-    run_command(
-        &installed_nssm,
-        &[
-            "set",
-            SERVICE_NAME,
-            "AppEnvironmentExtra",
-            &cloud_setting,
-            &token_setting,
-        ],
     )?;
     run_command(
         &installed_nssm,
@@ -245,6 +275,7 @@ mod gui {
     }
 
     pub fn run() -> AppResult<()> {
+        runtime_environment()?;
         unsafe {
             let instance = GetModuleHandleW(null());
             let class_name = wide("ActivateurRmsNativeWindow");
@@ -355,7 +386,13 @@ mod gui {
             500,
             22,
         );
-        let token = edit(window, "", ID_TOKEN, Bounds::new(24, 106, 505, 27), true);
+        let token = edit(
+            window,
+            &configured_api_token(),
+            ID_TOKEN,
+            Bounds::new(24, 106, 505, 27),
+            true,
+        );
         label(window, "Logiciel", 24, 145, 130, 22);
         let app_type = CreateWindowExW(
             0,
@@ -371,7 +408,7 @@ mod gui {
             GetModuleHandleW(null()),
             null(),
         );
-        for item in ["Restaurant", "Lab", "Jewelry"] {
+        for item in APP_TYPES {
             let item = wide(item);
             SendMessageW(app_type, CB_ADDSTRING, 0, item.as_ptr() as _);
         }
@@ -464,10 +501,7 @@ mod gui {
             }
         };
         let selection = SendMessageW(controls.app_type, CB_GETCURSEL, 0, 0) as usize;
-        let app_type = ["Restaurant", "Lab", "Jewelry"]
-            .get(selection)
-            .copied()
-            .unwrap_or("Restaurant");
+        let app_type = APP_TYPES.get(selection).copied().unwrap_or("Restaurant");
         set_text(controls.status, "Generation en cours...");
         UpdateWindow(controls.status);
         match generate_key(&request_code, app_type, &cloud_url) {

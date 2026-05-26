@@ -1,11 +1,14 @@
+import os
 import sys
 from contextlib import contextmanager
+from functools import wraps
 
 import psycopg2
-from psycopg2.extras import RealDictCursor
 from flask import Flask, request, jsonify, render_template_string
-from functools import wraps
-import os
+from dotenv import load_dotenv
+from psycopg2.extras import RealDictCursor
+
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 app = Flask(__name__)
 

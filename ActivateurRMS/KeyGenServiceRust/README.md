@@ -30,7 +30,8 @@ the user interface.
 
 ## Configuration
 
-Set these environment variables for the Windows service:
+The installed service reads `.env` beside `KeyGenService.exe`. The native
+installer creates this filtered client configuration automatically:
 
 ```text
 KEYGEN_CLOUD_API_URL=https://activation.example.com

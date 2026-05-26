@@ -6,6 +6,7 @@ version = 4
 name = "activateur-rms"
 version = "0.1.0"
 dependencies = [
+ "keygen-common",
  "serde",
  "serde_json",
  "ureq",
@@ -370,10 +371,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "keygen-common"
+version = "0.1.0"
+
+[[package]]
 name = "keygen-service"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "keygen-common",
  "serde",
  "serde_json",
  "sha2",

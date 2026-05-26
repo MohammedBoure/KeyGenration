@@ -1,5 +1,5 @@
 [workspace]
-members = ["ActivateurRust", "KeyGenServiceRust"]
+members = ["ActivateurRust", "KeyGenCommonRust", "KeyGenServiceRust"]
 resolver = "3"
 
 [profile.release]

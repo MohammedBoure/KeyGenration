@@ -1,4 +1,5 @@
 use chrono::{SecondsFormat, Utc};
+use keygen_common::RuntimeEnvironment;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -30,13 +31,24 @@ struct Config {
 }
 
 impl Config {
-    fn from_environment() -> Self {
+    fn from_environment(environment: &RuntimeEnvironment) -> Self {
         Self {
-            listen_address: env::var("KEYGEN_LISTEN_ADDRESS")
-                .unwrap_or_else(|_| DEFAULT_LISTEN_ADDRESS.to_owned()),
-            api_token: env::var("KEYGEN_API_SECRET_TOKEN").unwrap_or_default(),
-            status_interval: seconds_from_environment("KEYGEN_STATUS_INTERVAL_SECONDS", 300),
-            upload_interval: seconds_from_environment("KEYGEN_UPLOAD_INTERVAL_SECONDS", 5),
+            listen_address: environment
+                .value("KEYGEN_LISTEN_ADDRESS")
+                .unwrap_or_else(|| DEFAULT_LISTEN_ADDRESS.to_owned()),
+            api_token: environment
+                .value("KEYGEN_API_SECRET_TOKEN")
+                .unwrap_or_default(),
+            status_interval: seconds_from_environment(
+                environment,
+                "KEYGEN_STATUS_INTERVAL_SECONDS",
+                300,
+            ),
+            upload_interval: seconds_from_environment(
+                environment,
+                "KEYGEN_UPLOAD_INTERVAL_SECONDS",
+                5,
+            ),
         }
     }
 }
@@ -51,8 +63,8 @@ struct StoragePaths {
 }
 
 impl StoragePaths {
-    fn from_environment() -> AppResult<Self> {
-        let override_dir = env::var_os("KEYGEN_DATA_DIR").map(PathBuf::from);
+    fn from_environment(environment: &RuntimeEnvironment) -> AppResult<Self> {
+        let override_dir = environment.value("KEYGEN_DATA_DIR").map(PathBuf::from);
         let base_dir = match &override_dir {
             Some(path) => path.clone(),
             None => default_data_dir(),
@@ -60,7 +72,8 @@ impl StoragePaths {
 
         fs::create_dir_all(&base_dir)?;
 
-        let primary_log = env::var_os("KEYGEN_PRIMARY_LOG")
+        let primary_log = environment
+            .value("KEYGEN_PRIMARY_LOG")
             .map(PathBuf::from)
             .unwrap_or_else(|| match override_dir {
                 Some(_) => base_dir.join("generated_keys.txt"),
@@ -109,16 +122,17 @@ struct AppState {
 }
 
 impl AppState {
-    fn from_environment() -> AppResult<Self> {
-        let cloud_api_url =
-            env::var("KEYGEN_CLOUD_API_URL").unwrap_or_else(|_| DEFAULT_CLOUD_API_URL.to_owned());
+    fn from_environment(environment: &RuntimeEnvironment) -> AppResult<Self> {
+        let cloud_api_url = environment
+            .value("KEYGEN_CLOUD_API_URL")
+            .unwrap_or_else(|| DEFAULT_CLOUD_API_URL.to_owned());
         let cloud_api_url = normalize_cloud_url(&cloud_api_url)
             .ok_or("KEYGEN_CLOUD_API_URL must begin with http:// or https://")?;
-        let paths = StoragePaths::from_environment()?;
+        let paths = StoragePaths::from_environment(environment)?;
         let maintenance = paths.maintenance_file.exists();
 
         Ok(Self {
-            config: Config::from_environment(),
+            config: Config::from_environment(environment),
             cloud_api_url: RwLock::new(cloud_api_url),
             maintenance: AtomicBool::new(maintenance),
             queue_lock: Mutex::new(()),
@@ -285,7 +299,8 @@ struct CloudActivationLog<'a> {
 }
 
 fn main() -> AppResult<()> {
-    let state = Arc::new(AppState::from_environment()?);
+    let environment = RuntimeEnvironment::load()?;
+    let state = Arc::new(AppState::from_environment(&environment)?);
 
     if state.config.api_token.is_empty() {
         eprintln!(
@@ -303,6 +318,9 @@ fn main() -> AppResult<()> {
         state.config.listen_address
     );
     println!("Cloud API: {}", state.cloud_api_url());
+    if environment.exists() {
+        println!("Config: {}", environment.path().display());
+    }
     println!("Queue: {}", state.paths.pending_uploads.display());
 
     for request in server.incoming_requests() {
@@ -492,9 +510,13 @@ fn now_timestamp() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false)
 }
 
-fn seconds_from_environment(variable: &str, default: u64) -> Duration {
-    let seconds = env::var(variable)
-        .ok()
+fn seconds_from_environment(
+    environment: &RuntimeEnvironment,
+    variable: &str,
+    default: u64,
+) -> Duration {
+    let seconds = environment
+        .value(variable)
         .and_then(|value| value.parse().ok())
         .unwrap_or(default);
     Duration::from_secs(seconds)
@@ -527,10 +549,12 @@ mod tests {
 
     #[test]
     fn supports_application_specific_secrets() {
-        assert_ne!(
-            generate_activation_key("F81A-67A7-C6AA", "Restaurant"),
-            generate_activation_key("F81A-67A7-C6AA", "Lab")
-        );
+        let restaurant = generate_activation_key("F81A-67A7-C6AA", "Restaurant");
+        let lab = generate_activation_key("F81A-67A7-C6AA", "Lab");
+        let jewelry = generate_activation_key("F81A-67A7-C6AA", "Jewelry");
+        assert_ne!(restaurant, lab);
+        assert_ne!(restaurant, jewelry);
+        assert_ne!(lab, jewelry);
     }
 
     #[test]
