@@ -2,11 +2,19 @@
 
 ## Cloud API Authentication
 
-All `/api/v1/*` routes require:
+The distributed Rust client contains only the limited client token:
 
 ```http
 Authorization: Bearer <KEYGEN_API_SECRET_TOKEN>
 Content-Type: application/json
+```
+
+It may call `GET /api/v1/server-status` and `POST /api/v1/generate-key`.
+Administration routes require the separate token that must never be included
+in a client build:
+
+```http
+Authorization: Bearer <KEYGEN_ADMIN_SECRET_TOKEN>
 ```
 
 ## Cloud Routes
@@ -21,30 +29,33 @@ Returns the generation state:
 
 `1` is active and `0` is maintenance.
 
-### `POST /api/v1/set-status`
+### `POST /api/v1/generate-key`
+
+The key algorithm exists only in Cloud API. Generation succeeds only while
+`server_control.status` is `1`, and the record is inserted in PostgreSQL in
+the same request.
+
+```json
+{"request_code":"F81A-67A7-C6AA","app_type":"Restaurant"}
+```
+
+Success:
+
+```json
+{"request_code":"F81A-67A7-C6AA","activation_key":"EE8C-551F-0A90-73F5","app_type":"Restaurant","status":"generated_and_recorded"}
+```
+
+When disabled it returns HTTP `503` without generating a key.
+
+### `POST /api/v1/set-status` (admin only)
 
 ```json
 {"status": "0"}
 ```
 
-### `GET /api/v1/activation-logs`
+### `GET /api/v1/activation-logs` (admin only)
 
 Returns activation records from PostgreSQL in descending identifier order.
-
-### `POST /api/v1/activation-logs`
-
-Accepts queued service records:
-
-```json
-[
-  {
-    "request_code": "F81A-67A7-C6AA",
-    "activation_key": "EE8C-551F-0A90-73F5",
-    "generated_at": "2026-05-26T16:00:00.000000+00:00",
-    "device_ip": "127.0.0.1"
-  }
-]
-```
 
 ## Local Rust Service
 
@@ -62,8 +73,7 @@ The default local address is `http://127.0.0.1:45632`; it can be changed via
 ```json
 {
   "request_code": "F81A-67A7-C6AA",
-  "app_type": "Restaurant",
-  "server_url": "https://activation.example.com"
+  "app_type": "Restaurant"
 }
 ```
 
@@ -74,11 +84,13 @@ Success:
   "request_code": "F81A-67A7-C6AA",
   "activation_key": "EE8C-551F-0A90-73F5",
   "app_type": "Restaurant",
-  "status": "generated_and_queued"
+  "status": "generated_by_cloud"
 }
 ```
 
-During maintenance the route returns HTTP `503` and does not generate a key.
+The local backend is a proxy and does not contain the key algorithm. It asks
+Cloud API for every key. During maintenance or when remote authorization
+cannot be verified, it returns HTTP `503` and does not generate a key.
 
 ## Local FastAPI Monitoring Dashboard
 

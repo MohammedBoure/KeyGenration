@@ -17,7 +17,7 @@ dist/                    ناتج البناء المحلي غير المتتب�
 
 ```powershell
 Copy-Item .\packaging\windows\client.env.example .\packaging\windows\.env
-# حرر packaging\windows\.env وضع عنوان Cloud API المنشور وتوكن العميل.
+# حرر packaging\windows\.env وضع عنوان Cloud API المنشور وتوكن العميل المحدود.
 ```
 
 لا تستخدم ملف `services/cloud-api/.env` لهذه الخطوة، ولا تضع بيانات
@@ -41,7 +41,7 @@ cargo clippy --all-targets -- -D warnings
 cd .\services\cloud-api
 python -m pip install -r .\requirements.txt
 Copy-Item .\.env.example .\.env
-# حرر .env وضع كلمة مرور PostgreSQL وتوكن API.
+# حرر .env وضع كلمة مرور PostgreSQL وتوكن العميل المحدود وتوكن الإدارة.
 python .\app.py
 ```
 
@@ -55,7 +55,8 @@ PGUSER=keygen_app
 PGPASSWORD=replace-with-database-password
 PGSSLMODE=require
 PGCONNECT_TIMEOUT=10
-KEYGEN_API_SECRET_TOKEN=replace-with-api-token
+KEYGEN_API_SECRET_TOKEN=replace-with-limited-client-token
+KEYGEN_ADMIN_SECRET_TOKEN=replace-with-distinct-admin-token
 FLASK_DEBUG=0
 ```
 
@@ -90,7 +91,8 @@ python .\app.py --migrate-sqlite .\cloud_database.db
 https://your-api-host/dashboard
 ```
 
-أدخل `KEYGEN_API_SECRET_TOKEN` لقراءة السجلات أو تغيير وضع التوليد.
+أدخل `KEYGEN_ADMIN_SECRET_TOKEN` لقراءة السجلات أو تغيير وضع التوليد.
+لا تضع هذا التوكن في حزمة برنامج البائع.
 
 للمراقبة المباشرة من جهاز الإدارة دون نشر Cloud API، شغل لوحة FastAPI
 المحلية التي تتصل بنفس قاعدة PostgreSQL:
@@ -109,7 +111,10 @@ python .\fastapi_app.py
 1. جهز `.env` للخادم داخل `services/cloud-api/` فقط.
 2. اختبر اتصال PostgreSQL باستخدام `--init-db-only`.
 3. انشر API خلف HTTPS.
-4. أنشئ `packaging/windows/.env` من قالب العميل وضع عنوان API المنشور فعليا.
-5. نفذ `packaging/windows/package.cmd` لتضمين إعداد العميل المصفى.
-6. شغل الواجهة؛ ستطلب صلاحية Administrator تلقائيا عند الحاجة لتجهيز الخدمة.
-7. ولد مفتاحا لكل نوع برنامج وتحقق من ظهوره في لوحة التحكم.
+4. أنشئ توكن إدارة منفصلا عن توكن العميل في إعداد الخادم.
+5. أنشئ `packaging/windows/.env` من قالب العميل وضع عنوان API المنشور وتوكن
+   العميل المحدود فقط.
+6. نفذ `packaging/windows/package.cmd` لتضمين إعداد العميل المصفى.
+7. شغل الواجهة؛ ستطلب صلاحية Administrator تلقائيا عند الحاجة لتجهيز الخدمة.
+8. ولد مفتاحا لكل نوع برنامج وتحقق من ظهوره في لوحة التحكم.
+9. غير الحالة إلى `0` وتحقق من رفض تشغيل المولد أو إصدار مفتاح جديد.

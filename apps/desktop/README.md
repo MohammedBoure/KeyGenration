@@ -9,6 +9,7 @@ The client usage guide is in
 
 - Display the activation UI for `Restaurant`, `Lab`, and `Jewelry`.
 - Show only application selection, identifier input, activation output, and generation status.
+- Refuse to open the generation UI or install the service unless Cloud API status is active.
 - Verify hidden cloud API settings and install `KeyGenService.exe` with NSSM automatically.
 - Read filtered client settings embedded during the package build.
 - Call the local Rust service to generate activation keys.
@@ -41,4 +42,5 @@ PostgreSQL connection values.
 
 When the local service is absent, `ActivateurRMS.exe` requests administrator
 permission and installs it automatically. Generation itself does not require
-elevation once the service is active.
+elevation once the service is active. If central status is `0`, startup fails
+closed before the generation window or an installation action is available.

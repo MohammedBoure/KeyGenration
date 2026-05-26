@@ -10,10 +10,11 @@ The deployment guide is in
 POST http://127.0.0.1:45632/generate_key
 ```
 
-The desktop service does not connect directly to PostgreSQL. It queues
-generated activation records locally and sends them to the cloud API, whose
-storage is PostgreSQL. This prevents distributing database credentials inside
-the client executable.
+The desktop service does not connect directly to PostgreSQL and does not
+contain the activation-key algorithm. For each request it verifies remote
+authorization and asks Cloud API to generate and record the key in PostgreSQL.
+This prevents a new distributed client binary from continuing normal key
+generation after the administrator disables it.
 
 ## Build
 
@@ -40,7 +41,7 @@ possible:
 
 ```text
 KEYGEN_CLOUD_API_URL=https://activation.example.com
-KEYGEN_API_SECRET_TOKEN=<cloud-api-token>
+KEYGEN_API_SECRET_TOKEN=<limited-client-token>
 ```
 
 Optional test and runtime settings:
@@ -50,5 +51,4 @@ KEYGEN_LISTEN_ADDRESS=127.0.0.1:45632
 KEYGEN_DATA_DIR=<override-local-data-folder>
 KEYGEN_PRIMARY_LOG=<override-primary-log-file>
 KEYGEN_STATUS_INTERVAL_SECONDS=300
-KEYGEN_UPLOAD_INTERVAL_SECONDS=5
 ```

@@ -13,12 +13,11 @@ use std::time::Duration;
 const DEFAULT_CLOUD_API_URL: &str = "https://activation.example.com";
 const DEFAULT_LOCAL_LISTEN_ADDRESS: &str = "127.0.0.1:45632";
 const SERVICE_NAME: &str = "KeyGenService";
-const SERVICE_ENV_OPTIONS: [&str; 5] = [
+const SERVICE_ENV_OPTIONS: [&str; 4] = [
     "KEYGEN_LISTEN_ADDRESS",
     "KEYGEN_DATA_DIR",
     "KEYGEN_PRIMARY_LOG",
     "KEYGEN_STATUS_INTERVAL_SECONDS",
-    "KEYGEN_UPLOAD_INTERVAL_SECONDS",
 ];
 
 type AppResult<T> = Result<T, String>;
@@ -37,7 +36,6 @@ struct GenerateResponse {
 struct GenerateRequest<'a> {
     request_code: &'a str,
     app_type: &'a str,
-    server_url: &'a str,
 }
 
 fn configured_cloud_url() -> String {
@@ -121,6 +119,23 @@ fn cloud_status(cloud_url: &str, api_token: &str) -> AppResult<String> {
     Ok(status.status)
 }
 
+fn require_active_cloud_status(cloud_url: &str, api_token: &str) -> AppResult<()> {
+    require_active_cloud_status_value(&cloud_status(cloud_url, api_token)?)
+}
+
+fn require_active_cloud_status_value(status: &str) -> AppResult<()> {
+    match status.trim() {
+        "1" => Ok(()),
+        "0" => Err("Ce generateur a ete desactive par l'administrateur.".to_owned()),
+        _ => Err("Etat d'autorisation distant invalide.".to_owned()),
+    }
+}
+
+fn verify_startup_authorization() -> AppResult<()> {
+    let cloud_url = validate_cloud_url(&configured_cloud_url())?;
+    require_active_cloud_status(&cloud_url, &configured_api_token())
+}
+
 fn local_service_ready() -> AppResult<()> {
     ureq::get(&configured_local_health_url()?)
         .timeout(Duration::from_secs(2))
@@ -129,12 +144,11 @@ fn local_service_ready() -> AppResult<()> {
         .map_err(|error| format!("Service local indisponible: {error}"))
 }
 
-fn generate_key(request_code: &str, app_type: &str, cloud_url: &str) -> AppResult<String> {
+fn generate_key(request_code: &str, app_type: &str) -> AppResult<String> {
     let local_generate_url = configured_local_generate_url()?;
     let payload = GenerateRequest {
         request_code,
         app_type,
-        server_url: cloud_url,
     };
     let response = ureq::post(&local_generate_url)
         .set("Content-Type", "application/json")
@@ -201,7 +215,7 @@ fn service_environment_contents(cloud_url: &str, api_token: &str) -> AppResult<S
 }
 
 fn install_service(cloud_url: &str, api_token: &str) -> AppResult<String> {
-    let status = cloud_status(cloud_url, api_token)?;
+    require_active_cloud_status(cloud_url, api_token)?;
     let source_root = bundle_root()?;
     let source_service = source_root.join("KeyGenService").join("KeyGenService.exe");
     let source_nssm = source_root.join("nssm").join("nssm.exe");
@@ -249,12 +263,7 @@ fn install_service(cloud_url: &str, api_token: &str) -> AppResult<String> {
     run_command(&installed_nssm, &["set", SERVICE_NAME, "AppNoConsole", "1"])?;
     run_command(&installed_nssm, &["start", SERVICE_NAME])?;
 
-    let mode = if status.trim() == "1" {
-        "actif"
-    } else {
-        "maintenance"
-    };
-    Ok(format!("Service Rust installe et demarre. Cloud: {mode}."))
+    Ok("Service Rust installe et demarre.".to_owned())
 }
 
 #[cfg(windows)]
@@ -302,6 +311,7 @@ mod gui {
 
     pub fn run() -> AppResult<()> {
         runtime_environment()?;
+        verify_startup_authorization()?;
         unsafe {
             let instance = GetModuleHandleW(null());
             let class_name = wide("ActivateurRmsNativeWindow");
@@ -470,13 +480,6 @@ mod gui {
     }
 
     unsafe fn generate_clicked(controls: &Controls) {
-        let cloud_url = match validate_cloud_url(&configured_cloud_url()) {
-            Ok(url) => url,
-            Err(error) => {
-                set_text(controls.status, &error);
-                return;
-            }
-        };
         let request_code = match validate_request_code(&get_text(controls.code)) {
             Ok(code) => code,
             Err(error) => {
@@ -488,7 +491,7 @@ mod gui {
         let app_type = APP_TYPES.get(selection).copied().unwrap_or("Restaurant");
         set_text(controls.status, "Generation en cours...");
         UpdateWindow(controls.status);
-        match generate_key(&request_code, app_type, &cloud_url) {
+        match generate_key(&request_code, app_type) {
             Ok(key) => {
                 set_text(controls.key, &key);
                 set_text(
@@ -662,5 +665,11 @@ mod tests {
             Ok("http://127.0.0.1:45639/health".to_owned())
         );
         assert!(local_endpoint_url("not-a-socket", "health").is_err());
+    }
+
+    #[test]
+    fn rejects_disabled_startup_status() {
+        assert!(require_active_cloud_status_value("1").is_ok());
+        assert!(require_active_cloud_status_value("0").is_err());
     }
 }

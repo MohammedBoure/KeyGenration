@@ -1,7 +1,7 @@
 # Cloud API
 
-Flask service for PostgreSQL-backed activation logs and remote maintenance
-status. Full deployment instructions are in
+Flask service for server-side activation key generation, PostgreSQL-backed
+activation logs, and remote maintenance status. Full deployment instructions are in
 [`../../docs/ar/deployment.md`](../../docs/ar/deployment.md).
 
 ```powershell
@@ -12,6 +12,11 @@ python .\app.py
 
 The server `.env` belongs only on the cloud host and must never be distributed
 with the Windows client package.
+
+Define two distinct tokens in `.env`:
+
+- `KEYGEN_API_SECRET_TOKEN` is embedded in the client and may request keys only while enabled.
+- `KEYGEN_ADMIN_SECRET_TOKEN` controls status and reads logs; never embed or distribute it.
 
 ## Local FastAPI Dashboard
 
