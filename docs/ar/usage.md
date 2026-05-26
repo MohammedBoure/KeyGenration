@@ -40,7 +40,9 @@ KEYGEN_STATUS_INTERVAL_SECONDS=300
 KEYGEN_UPLOAD_INTERVAL_SECONDS=5
 ```
 
-لا تضع بيانات PostgreSQL في حزمة العميل.
+لا تضع بيانات PostgreSQL في حزمة العميل. عنوان
+`https://activation.example.com` قيمة نموذجية وليست خدمة فعلية؛ يجب
+استبداله بعنوان Cloud API المنشور قبل التثبيت.
 
 ## تثبيت الخدمة
 

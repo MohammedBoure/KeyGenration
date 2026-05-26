@@ -14,7 +14,7 @@ use std::thread;
 use std::time::Duration;
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
-const DEFAULT_CLOUD_API_URL: &str = "http://qylad-server.duckdns.org:7002";
+const DEFAULT_CLOUD_API_URL: &str = "https://activation.example.com";
 const DEFAULT_LISTEN_ADDRESS: &str = "127.0.0.1:45632";
 const RESTAURANT_SECRET: &str = "RestaurantManagement";
 const LAB_SECRET: &str = "LabInventoryManagement";

@@ -90,5 +90,6 @@ https://your-api-host/dashboard
 3. انشر API خلف HTTPS.
 4. نفذ `packaging/windows/package.cmd`.
 5. جهز `.env` للعميل من ملف القالب داخل الحزمة.
+   استبدل عنوان `activation.example.com` بعنوان API المنشور فعليا.
 6. ثبت الخدمة من الواجهة بصلاحية Administrator.
 7. ولد مفتاحا لكل نوع برنامج وتحقق من ظهوره في لوحة التحكم.

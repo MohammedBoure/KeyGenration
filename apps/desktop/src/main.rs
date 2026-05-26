@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-const DEFAULT_CLOUD_API_URL: &str = "http://qylad-server.duckdns.org:7002";
+const DEFAULT_CLOUD_API_URL: &str = "https://activation.example.com";
 const DEFAULT_LOCAL_LISTEN_ADDRESS: &str = "127.0.0.1:45632";
 const SERVICE_NAME: &str = "KeyGenService";
 const SERVICE_ENV_OPTIONS: [&str; 5] = [
