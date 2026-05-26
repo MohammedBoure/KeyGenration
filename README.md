@@ -10,6 +10,8 @@
 ## البدء السريع
 
 ```powershell
+Copy-Item .\packaging\windows\client.env.example .\packaging\windows\.env
+# حرر packaging\windows\.env بعنوان Cloud API المنشور وتوكن العميل.
 cargo test
 cargo clippy --all-targets -- -D warnings
 .\packaging\windows\package.cmd
@@ -20,6 +22,9 @@ cargo clippy --all-targets -- -D warnings
 ```text
 dist\windows\ActivateurRMS\
 ```
+
+تضمّن عملية البناء إعدادات العميل المصفاة في ملفات Rust التنفيذية؛ لا
+يُوزع ملف `.env` مع العميل ولا يجب أن يحتوي إعداد العميل بيانات PostgreSQL.
 
 ## هيكل المشروع
 

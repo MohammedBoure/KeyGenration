@@ -33,8 +33,10 @@ the generated Windows package with the user interface.
 
 ## Configuration
 
-The installed service reads `.env` beside `KeyGenService.exe`. The native
-installer creates this filtered client configuration automatically:
+During packaging, filtered client settings from `packaging/windows/.env` are
+embedded in both Rust executables. The native installer also writes a filtered
+internal service configuration so administrative runtime overrides remain
+possible:
 
 ```text
 KEYGEN_CLOUD_API_URL=https://activation.example.com

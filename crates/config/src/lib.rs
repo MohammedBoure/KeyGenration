@@ -4,6 +4,8 @@ use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 
+include!(concat!(env!("OUT_DIR"), "/embedded_client_env.rs"));
+
 pub const APP_TYPES: [&str; 3] = ["Restaurant", "Lab", "Jewelry"];
 pub const ENV_PATH_VARIABLE: &str = "KEYGEN_ENV_FILE";
 
@@ -11,6 +13,7 @@ pub const ENV_PATH_VARIABLE: &str = "KEYGEN_ENV_FILE";
 pub struct RuntimeEnvironment {
     path: PathBuf,
     values: BTreeMap<String, String>,
+    embedded_values: BTreeMap<String, String>,
 }
 
 impl RuntimeEnvironment {
@@ -21,7 +24,12 @@ impl RuntimeEnvironment {
         } else {
             BTreeMap::new()
         };
-        Ok(Self { path, values })
+        let embedded_values = parse_dotenv(EMBEDDED_CLIENT_ENV)?;
+        Ok(Self {
+            path,
+            values,
+            embedded_values,
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -36,6 +44,7 @@ impl RuntimeEnvironment {
         env::var(name)
             .ok()
             .or_else(|| self.values.get(name).cloned())
+            .or_else(|| self.embedded_values.get(name).cloned())
     }
 }
 
@@ -183,6 +192,20 @@ mod tests {
         assert_eq!(
             values.get("KEYGEN_DATA_DIR").map(String::as_str),
             Some("C:\\ProgramData\\target\\runtime")
+        );
+    }
+
+    #[test]
+    fn runtime_file_value_overrides_embedded_build_value() {
+        let environment = RuntimeEnvironment {
+            path: PathBuf::new(),
+            values: parse_dotenv("KEYGEN_LISTEN_ADDRESS=127.0.0.1:45633\n").unwrap(),
+            embedded_values: parse_dotenv("KEYGEN_LISTEN_ADDRESS=127.0.0.1:45632\n").unwrap(),
+        };
+
+        assert_eq!(
+            environment.value("KEYGEN_LISTEN_ADDRESS").as_deref(),
+            Some("127.0.0.1:45633")
         );
     }
 }

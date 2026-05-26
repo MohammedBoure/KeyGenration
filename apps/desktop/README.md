@@ -8,9 +8,9 @@ The client usage guide is in
 ## Responsibilities
 
 - Display the activation UI for `Restaurant`, `Lab`, and `Jewelry`.
-- Verify the cloud API credentials before setup.
-- Install or upgrade `KeyGenService.exe` with NSSM.
-- Read package settings from `.env` and write filtered service settings.
+- Show only application selection, identifier input, activation output, and generation status.
+- Verify hidden cloud API settings and install `KeyGenService.exe` with NSSM automatically.
+- Read filtered client settings embedded during the package build.
 - Call the local Rust service to generate activation keys.
 
 Use an HTTPS cloud API address in production so the bearer token and
@@ -32,13 +32,13 @@ The package script writes these runtime assets under
 ActivateurRMS.exe
 KeyGenService\KeyGenService.exe
 nssm\nssm.exe
-.env.example
 ```
 
-Rename the packaged `.env.example` to `.env` and supply the cloud API
-settings. The installed service receives only client runtime settings and
-never PostgreSQL connection values.
+Before packaging, copy `packaging/windows/client.env.example` to
+`packaging/windows/.env` and supply the cloud API settings. The build embeds
+only the filtered client settings in the Rust binaries; it never embeds
+PostgreSQL connection values.
 
-Run `ActivateurRMS.exe` as administrator when installing or updating the
-Windows service. Generation itself does not require elevation once the
-service is active.
+When the local service is absent, `ActivateurRMS.exe` requests administrator
+permission and installs it automatically. Generation itself does not require
+elevation once the service is active.

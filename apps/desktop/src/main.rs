@@ -49,17 +49,25 @@ fn configured_api_token() -> String {
 }
 
 fn configured_local_generate_url() -> AppResult<String> {
-    let listen_address = configured_value("KEYGEN_LISTEN_ADDRESS")
-        .unwrap_or_else(|| DEFAULT_LOCAL_LISTEN_ADDRESS.to_owned());
-    local_generate_url(&listen_address)
+    configured_local_endpoint_url("generate_key")
 }
 
-fn local_generate_url(listen_address: &str) -> AppResult<String> {
+fn configured_local_health_url() -> AppResult<String> {
+    configured_local_endpoint_url("health")
+}
+
+fn configured_local_endpoint_url(endpoint: &str) -> AppResult<String> {
+    let listen_address = configured_value("KEYGEN_LISTEN_ADDRESS")
+        .unwrap_or_else(|| DEFAULT_LOCAL_LISTEN_ADDRESS.to_owned());
+    local_endpoint_url(&listen_address, endpoint)
+}
+
+fn local_endpoint_url(listen_address: &str, endpoint: &str) -> AppResult<String> {
     let address: SocketAddr = listen_address
         .trim()
         .parse()
         .map_err(|_| "KEYGEN_LISTEN_ADDRESS doit etre une adresse locale valide.".to_owned())?;
-    Ok(format!("http://{address}/generate_key"))
+    Ok(format!("http://{address}/{endpoint}"))
 }
 
 fn configured_value(name: &str) -> Option<String> {
@@ -98,7 +106,7 @@ fn validate_request_code(value: &str) -> AppResult<String> {
 
 fn cloud_status(cloud_url: &str, api_token: &str) -> AppResult<String> {
     if api_token.trim().is_empty() {
-        return Err("Entrez le token API pour installer le service.".to_owned());
+        return Err("Configuration API absente de l'application.".to_owned());
     }
     let url = format!("{cloud_url}/api/v1/server-status");
     let response = ureq::get(&url)
@@ -111,6 +119,14 @@ fn cloud_status(cloud_url: &str, api_token: &str) -> AppResult<String> {
         .into_json()
         .map_err(|error| format!("Reponse cloud invalide: {error}"))?;
     Ok(status.status)
+}
+
+fn local_service_ready() -> AppResult<()> {
+    ureq::get(&configured_local_health_url()?)
+        .timeout(Duration::from_secs(2))
+        .call()
+        .map(|_| ())
+        .map_err(|error| format!("Service local indisponible: {error}"))
 }
 
 fn generate_key(request_code: &str, app_type: &str, cloud_url: &str) -> AppResult<String> {
@@ -253,14 +269,10 @@ mod gui {
     use windows_sys::Win32::UI::Shell::{IsUserAnAdmin, ShellExecuteW};
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-    const ID_SERVER: i32 = 101;
-    const ID_TOKEN: i32 = 102;
-    const ID_APP_TYPE: i32 = 103;
-    const ID_CODE: i32 = 104;
-    const ID_KEY: i32 = 105;
-    const ID_INSTALL: i32 = 201;
-    const ID_GENERATE: i32 = 202;
-    const ID_ELEVATE: i32 = 203;
+    const ID_APP_TYPE: i32 = 101;
+    const ID_CODE: i32 = 102;
+    const ID_KEY: i32 = 103;
+    const ID_GENERATE: i32 = 201;
 
     #[derive(Clone, Copy)]
     struct Bounds {
@@ -282,8 +294,6 @@ mod gui {
     }
 
     struct Controls {
-        server: HWND,
-        token: HWND,
         app_type: HWND,
         code: HWND,
         key: HWND,
@@ -316,7 +326,7 @@ mod gui {
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
                 570,
-                475,
+                310,
                 null_mut(),
                 null_mut(),
                 instance,
@@ -351,24 +361,16 @@ mod gui {
     ) -> LRESULT {
         match message {
             WM_CREATE => {
-                let controls = create_controls(window);
-                SetWindowLongPtrW(
-                    window,
-                    GWLP_USERDATA,
-                    Box::into_raw(Box::new(controls)) as _,
-                );
+                let controls = Box::into_raw(Box::new(create_controls(window)));
+                SetWindowLongPtrW(window, GWLP_USERDATA, controls as _);
+                initialize_backend(window, &*controls);
                 0
             }
             WM_COMMAND => {
                 let command = (wparam & 0xffff) as i32;
                 let controls = control_state(window);
-                if !controls.is_null() {
-                    match command {
-                        ID_INSTALL => install_clicked(window, &*controls),
-                        ID_GENERATE => generate_clicked(&*controls),
-                        ID_ELEVATE => elevation_clicked(window, &*controls),
-                        _ => {}
-                    }
+                if !controls.is_null() && command == ID_GENERATE {
+                    generate_clicked(&*controls);
                 }
                 0
             }
@@ -386,37 +388,14 @@ mod gui {
     }
 
     unsafe fn create_controls(window: HWND) -> Controls {
-        label(window, "Serveur Cloud API", 24, 20, 500, 22);
-        let server = edit(
-            window,
-            &configured_cloud_url(),
-            ID_SERVER,
-            Bounds::new(24, 44, 505, 27),
-            false,
-        );
-        label(
-            window,
-            "Token API (necessaire pour installation)",
-            24,
-            82,
-            500,
-            22,
-        );
-        let token = edit(
-            window,
-            &configured_api_token(),
-            ID_TOKEN,
-            Bounds::new(24, 106, 505, 27),
-            true,
-        );
-        label(window, "Logiciel", 24, 145, 130, 22);
+        label(window, "Logiciel", 24, 20, 130, 22);
         let app_type = CreateWindowExW(
             0,
             wide("COMBOBOX").as_ptr(),
             null(),
             WS_CHILD | WS_VISIBLE | WS_VSCROLL | CBS_DROPDOWNLIST as u32,
             24,
-            169,
+            44,
             230,
             120,
             window,
@@ -429,41 +408,14 @@ mod gui {
             SendMessageW(app_type, CB_ADDSTRING, 0, item.as_ptr() as _);
         }
         SendMessageW(app_type, CB_SETCURSEL, 0, 0);
-        label(window, "Code de demande", 278, 145, 250, 22);
-        let code = edit(window, "", ID_CODE, Bounds::new(278, 169, 251, 27), false);
-        label(window, "Cle d'activation", 24, 214, 500, 22);
-        let key = edit(window, "", ID_KEY, Bounds::new(24, 238, 505, 27), false);
+        label(window, "Identifiant", 278, 20, 250, 22);
+        let code = edit(window, "", ID_CODE, Bounds::new(278, 44, 251, 27), false);
+        label(window, "Cle d'activation", 24, 90, 500, 22);
+        let key = edit(window, "", ID_KEY, Bounds::new(24, 114, 505, 27), false);
         SendMessageW(key, EM_SETREADONLY, 1, 0);
-        button(
-            window,
-            "Installer / Mettre a jour",
-            ID_INSTALL,
-            24,
-            287,
-            245,
-            38,
-        );
-        button(window, "Generer la cle", ID_GENERATE, 284, 287, 245, 38);
-        button(
-            window,
-            "Relancer comme administrateur",
-            ID_ELEVATE,
-            24,
-            338,
-            505,
-            34,
-        );
-        let status = label(
-            window,
-            "Pret. Installez le service Rust puis generez les cles.",
-            24,
-            391,
-            510,
-            35,
-        );
+        button(window, "Generer la cle", ID_GENERATE, 24, 163, 505, 38);
+        let status = label(window, "Preparation du service local...", 24, 219, 510, 35);
         Controls {
-            server,
-            token,
             app_type,
             code,
             key,
@@ -471,29 +423,45 @@ mod gui {
         }
     }
 
-    unsafe fn install_clicked(window: HWND, controls: &Controls) {
-        if IsUserAnAdmin() == 0 {
+    unsafe fn initialize_backend(window: HWND, controls: &Controls) {
+        if local_service_ready().is_ok() {
             set_text(
                 controls.status,
-                "L'installation exige les droits administrateur. Relancez l'application.",
+                "Pret. Saisissez l'identifiant puis generez la cle.",
             );
             return;
         }
-        let cloud_url = match validate_cloud_url(&get_text(controls.server)) {
+
+        if IsUserAnAdmin() == 0 {
+            set_text(
+                controls.status,
+                "Autorisation Windows requise pour preparer le service...",
+            );
+            UpdateWindow(controls.status);
+            if let Err(error) = relaunch_elevated(window) {
+                set_text(controls.status, &error);
+            }
+            return;
+        }
+
+        let cloud_url = match validate_cloud_url(&configured_cloud_url()) {
             Ok(url) => url,
             Err(error) => {
                 set_text(controls.status, &error);
                 return;
             }
         };
-        let token = get_text(controls.token);
+        let token = configured_api_token();
         set_text(
             controls.status,
-            "Verification cloud et installation en cours...",
+            "Installation automatique du service local...",
         );
         UpdateWindow(controls.status);
         match install_service(&cloud_url, &token) {
-            Ok(result) => set_text(controls.status, &result),
+            Ok(_) => set_text(
+                controls.status,
+                "Pret. Saisissez l'identifiant puis generez la cle.",
+            ),
             Err(error) => {
                 set_text(controls.status, &error);
                 message_box(window, "Installation impossible", &error);
@@ -502,7 +470,7 @@ mod gui {
     }
 
     unsafe fn generate_clicked(controls: &Controls) {
-        let cloud_url = match validate_cloud_url(&get_text(controls.server)) {
+        let cloud_url = match validate_cloud_url(&configured_cloud_url()) {
             Ok(url) => url,
             Err(error) => {
                 set_text(controls.status, &error);
@@ -532,12 +500,11 @@ mod gui {
         }
     }
 
-    unsafe fn elevation_clicked(window: HWND, controls: &Controls) {
+    unsafe fn relaunch_elevated(window: HWND) -> AppResult<()> {
         let executable = match env::current_exe() {
             Ok(path) => path,
             Err(error) => {
-                set_text(controls.status, &format!("Relance impossible: {error}"));
-                return;
+                return Err(format!("Relance impossible: {error}"));
             }
         };
         let verb = wide("runas");
@@ -552,8 +519,9 @@ mod gui {
         ) as isize;
         if outcome > 32 {
             DestroyWindow(window);
+            Ok(())
         } else {
-            set_text(controls.status, "Elevation refusee ou impossible.");
+            Err("Elevation refusee ou impossible.".to_owned())
         }
     }
 
@@ -684,11 +652,15 @@ mod tests {
     }
 
     #[test]
-    fn builds_local_generation_url_from_service_listener() {
+    fn builds_local_endpoint_urls_from_service_listener() {
         assert_eq!(
-            local_generate_url("127.0.0.1:45639"),
+            local_endpoint_url("127.0.0.1:45639", "generate_key"),
             Ok("http://127.0.0.1:45639/generate_key".to_owned())
         );
-        assert!(local_generate_url("not-a-socket").is_err());
+        assert_eq!(
+            local_endpoint_url("127.0.0.1:45639", "health"),
+            Ok("http://127.0.0.1:45639/health".to_owned())
+        );
+        assert!(local_endpoint_url("not-a-socket", "health").is_err());
     }
 }

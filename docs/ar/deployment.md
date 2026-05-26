@@ -13,7 +13,15 @@ dist/                    ناتج البناء المحلي غير المتتب�
 
 ## بناء عميل Rust
 
-من جذر المستودع:
+جهز أولا إعداد العميل الذي سيضمّن في ملفي Rust التنفيذيين:
+
+```powershell
+Copy-Item .\packaging\windows\client.env.example .\packaging\windows\.env
+# حرر packaging\windows\.env وضع عنوان Cloud API المنشور وتوكن العميل.
+```
+
+لا تستخدم ملف `services/cloud-api/.env` لهذه الخطوة، ولا تضع بيانات
+PostgreSQL في إعداد العميل. ثم من جذر المستودع:
 
 ```powershell
 cargo fmt --all
@@ -24,7 +32,8 @@ cargo clippy --all-targets -- -D warnings
 
 يشغل ملف `package.cmd` سكربت PowerShell بسياسة تنفيذ مناسبة للتغليف المحلي،
 ثم ينفذ `cargo build --release --workspace` وينسخ ملفات التشغيل إلى
-`dist\windows\ActivateurRMS\`، ثم ينشئ `SHA256SUMS.txt`.
+`dist\windows\ActivateurRMS\`، ثم ينشئ `SHA256SUMS.txt`. لا تتضمن الحزمة
+ملف `.env`؛ تقرأ الواجهة والخدمة المحلية الإعدادات المصفاة المضمّنة.
 
 ## تشغيل Cloud API
 
@@ -100,8 +109,7 @@ python .\fastapi_app.py
 1. جهز `.env` للخادم داخل `services/cloud-api/` فقط.
 2. اختبر اتصال PostgreSQL باستخدام `--init-db-only`.
 3. انشر API خلف HTTPS.
-4. نفذ `packaging/windows/package.cmd`.
-5. جهز `.env` للعميل من ملف القالب داخل الحزمة.
-   استبدل عنوان `activation.example.com` بعنوان API المنشور فعليا.
-6. ثبت الخدمة من الواجهة بصلاحية Administrator.
+4. أنشئ `packaging/windows/.env` من قالب العميل وضع عنوان API المنشور فعليا.
+5. نفذ `packaging/windows/package.cmd` لتضمين إعداد العميل المصفى.
+6. شغل الواجهة؛ ستطلب صلاحية Administrator تلقائيا عند الحاجة لتجهيز الخدمة.
 7. ولد مفتاحا لكل نوع برنامج وتحقق من ظهوره في لوحة التحكم.
