@@ -3,8 +3,8 @@
 This is the lightweight local backend used by the native Rust interface. It
 exposes the local key-generation endpoint:
 
-The full Arabic operation and deployment guide is in
-[`../README.md`](../README.md).
+The deployment guide is in
+[`../../docs/ar/deployment.md`](../../docs/ar/deployment.md).
 
 ```text
 POST http://127.0.0.1:45632/generate_key
@@ -18,7 +18,7 @@ the client executable.
 ## Build
 
 ```powershell
-cd .\ActivateurRMS
+cd <repository-root>
 cargo build --release -p keygen-service
 ```
 
@@ -28,8 +28,8 @@ The Windows executable is written to:
 target\release\KeyGenService.exe
 ```
 
-Place that executable in `KeyGenService\KeyGenService.exe` for packaging with
-the user interface.
+Run `.\packaging\windows\package.cmd -SkipBuild` to place that executable in
+the generated Windows package with the user interface.
 
 ## Configuration
 

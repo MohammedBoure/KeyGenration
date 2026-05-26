@@ -13,6 +13,7 @@ project_snapshots/
 
 dist
 dist-ssr
+/dist/
 *.local
 .env
 .env.*
@@ -22,6 +23,7 @@ __pycache__/
 target/
 /ActivateurRMS/KeyGenServiceSC/build/
 /ActivateurRMS/KeyGenServiceSC/*.spec
+/ActivateurRMS/KeyGenServiceSC/dist/
 
 # Editor directories and files
 .vscode/*

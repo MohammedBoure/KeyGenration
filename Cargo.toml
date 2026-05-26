@@ -1,5 +1,5 @@
 [workspace]
-members = ["ActivateurRust", "KeyGenCommonRust", "KeyGenServiceRust"]
+members = ["apps/desktop", "apps/keygen-service", "crates/config"]
 resolver = "3"
 
 [profile.release]

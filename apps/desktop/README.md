@@ -2,8 +2,8 @@
 
 This crate provides the native Windows Rust desktop program.
 
-The full Arabic operation and deployment guide is in
-[`../README.md`](../README.md).
+The client usage guide is in
+[`../../docs/ar/usage.md`](../../docs/ar/usage.md).
 
 ## Responsibilities
 
@@ -19,23 +19,25 @@ activation records are encrypted in transit.
 ## Build
 
 ```powershell
-cd .\ActivateurRMS
+cd <repository-root>
 cargo test
 cargo build --release -p activateur-rms
-Copy-Item .\target\release\ActivateurRMS.exe .\ActivateurRMS.exe
+.\packaging\windows\package.cmd -SkipBuild
 ```
 
-Package `ActivateurRMS.exe` alongside these runtime assets:
+The package script writes these runtime assets under
+`dist\windows\ActivateurRMS`:
 
 ```text
 ActivateurRMS.exe
 KeyGenService\KeyGenService.exe
 nssm\nssm.exe
-.env
+.env.example
 ```
 
-Create `.env` from `client.env.example`. The installed service receives only
-the client runtime settings and never PostgreSQL connection values.
+Rename the packaged `.env.example` to `.env` and supply the cloud API
+settings. The installed service receives only client runtime settings and
+never PostgreSQL connection values.
 
 Run `ActivateurRMS.exe` as administrator when installing or updating the
 Windows service. Generation itself does not require elevation once the

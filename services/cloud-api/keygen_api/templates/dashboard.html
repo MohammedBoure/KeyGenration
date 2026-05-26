@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>لوحة تحكم التفعيلات</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+    <style>
+        body { background: #f8f9fa; font-family: "Segoe UI", Tahoma, sans-serif; }
+        .card { border-radius: 15px; box-shadow: 0 4px 6px rgba(0, 0, 0, .1); margin-bottom: 20px; }
+        .status-badge { font-size: 1.2em; padding: 10px 20px; border-radius: 10px; }
+    </style>
+</head>
+<body>
+    <main class="container mt-5">
+        <h1 class="text-center mb-4 text-primary">لوحة تحكم السيرفر (KeyGen)</h1>
+        <section class="card p-4">
+            <div class="row align-items-end">
+                <div class="col-md-8">
+                    <label class="form-label fw-bold" for="apiToken">توكن API:</label>
+                    <input type="password" id="apiToken" class="form-control" placeholder="أدخل التوكن السري للاتصال">
+                </div>
+                <div class="col-md-4 mt-3 mt-md-0">
+                    <button class="btn btn-primary w-100" id="loadButton">دخول وتحديث البيانات</button>
+                </div>
+            </div>
+            <div id="authAlert" class="alert alert-danger mt-3 d-none">التوكن غير صحيح.</div>
+        </section>
+        <section id="mainContent" class="d-none">
+            <div class="card p-4 text-center">
+                <h3>حالة توليد المفاتيح</h3>
+                <div class="my-3">
+                    <span id="statusIndicator" class="badge bg-secondary status-badge">جاري التحميل</span>
+                </div>
+                <div>
+                    <button class="btn btn-success me-2" data-status="1">تشغيل التوليد</button>
+                    <button class="btn btn-danger" data-status="0">إيقاف / صيانة</button>
+                </div>
+            </div>
+            <div class="card p-4">
+                <h3>سجلات التفعيل</h3>
+                <div class="table-responsive mt-3">
+                    <table class="table table-hover table-bordered">
+                        <thead class="table-dark">
+                            <tr><th>#</th><th>كود الطلب</th><th>مفتاح التفعيل</th><th>IP</th><th>تاريخ التوليد</th></tr>
+                        </thead>
+                        <tbody id="logsTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </main>
+    <script>
+        const tokenInput = document.getElementById("apiToken");
+        const alertBox = document.getElementById("authAlert");
+        const content = document.getElementById("mainContent");
+        const tableBody = document.getElementById("logsTableBody");
+        const indicator = document.getElementById("statusIndicator");
+
+        function headers() {
+            return { "Authorization": "Bearer " + tokenInput.value, "Content-Type": "application/json" };
+        }
+
+        function updateStatus(status) {
+            const active = status === "1";
+            indicator.textContent = active ? "يعمل (Active)" : "متوقف / صيانة (Maintenance)";
+            indicator.className = "badge status-badge " + (active ? "bg-success" : "bg-danger");
+        }
+
+        function appendCell(row, value) {
+            const cell = document.createElement("td");
+            cell.textContent = value == null ? "" : String(value);
+            row.appendChild(cell);
+        }
+
+        async function loadData() {
+            if (!tokenInput.value) {
+                alert("الرجاء إدخال التوكن.");
+                return;
+            }
+            alertBox.classList.add("d-none");
+            const statusResponse = await fetch("/api/v1/server-status", { headers: headers() });
+            if (statusResponse.status === 401 || statusResponse.status === 403) {
+                alertBox.classList.remove("d-none");
+                content.classList.add("d-none");
+                return;
+            }
+            if (!statusResponse.ok) {
+                throw new Error("تعذر قراءة حالة السيرفر.");
+            }
+            updateStatus((await statusResponse.json()).status);
+            const logsResponse = await fetch("/api/v1/activation-logs", { headers: headers() });
+            if (!logsResponse.ok) {
+                throw new Error("تعذر قراءة السجلات.");
+            }
+            tableBody.replaceChildren();
+            for (const log of await logsResponse.json()) {
+                const row = document.createElement("tr");
+                appendCell(row, log.id);
+                appendCell(row, log.request_code);
+                appendCell(row, log.activation_key);
+                appendCell(row, log.device_ip);
+                appendCell(row, log.generated_at);
+                tableBody.appendChild(row);
+            }
+            content.classList.remove("d-none");
+        }
+
+        async function changeStatus(status) {
+            if (!confirm("تأكيد تغيير حالة التوليد؟")) {
+                return;
+            }
+            const response = await fetch("/api/v1/set-status", {
+                method: "POST",
+                headers: headers(),
+                body: JSON.stringify({ status: status })
+            });
+            if (!response.ok) {
+                throw new Error("تعذر تغيير الحالة.");
+            }
+            updateStatus(status);
+        }
+
+        document.getElementById("loadButton").addEventListener("click", () => loadData().catch(error => alert(error.message)));
+        document.querySelectorAll("[data-status]").forEach(button => {
+            button.addEventListener("click", () => changeStatus(button.dataset.status).catch(error => alert(error.message)));
+        });
+    </script>
+</body>
+</html>
