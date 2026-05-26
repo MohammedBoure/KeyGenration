@@ -66,3 +66,33 @@ Every key generated is immediately uploaded to Supabase.
 **Field:** `status`
 *   `"1"` → Activated (Generates keys)
 *   `"0"` → Immediately deactivated (globally)
+
+## PostgreSQL-backed API Server
+
+`server.py` stores the control status and activation logs in PostgreSQL. It
+defaults to `sw4.duckdns.org:9005/keygen_restaurant` and requires SSL.
+Secrets must be supplied as environment variables and must not be committed.
+
+Install the server dependencies:
+
+```powershell
+python -m pip install -r .\server_requirements.txt
+```
+
+Set configuration before running the API server. See `.env.example` for all
+available variables.
+
+```powershell
+$env:PGPASSWORD = "<database-password>"
+$env:KEYGEN_API_SECRET_TOKEN = "<api-token>"
+python .\server.py
+```
+
+For an existing local `cloud_database.db`, run the one-time idempotent import
+before starting the web server:
+
+```powershell
+$env:PGPASSWORD = "<database-password>"
+$env:KEYGEN_API_SECRET_TOKEN = "<api-token>"
+python .\server.py --migrate-sqlite .\cloud_database.db
+```
