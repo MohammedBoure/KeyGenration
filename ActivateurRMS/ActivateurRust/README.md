@@ -2,6 +2,9 @@
 
 This crate provides the native Windows Rust desktop program.
 
+The full Arabic operation and deployment guide is in
+[`../README.md`](../README.md).
+
 ## Responsibilities
 
 - Display the activation UI for `Restaurant`, `Lab`, and `Jewelry`.

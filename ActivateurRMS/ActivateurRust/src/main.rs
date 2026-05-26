@@ -5,12 +5,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::env;
 use std::fs;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
 const DEFAULT_CLOUD_API_URL: &str = "http://qylad-server.duckdns.org:7002";
-const LOCAL_GENERATE_URL: &str = "http://127.0.0.1:45632/generate_key";
+const DEFAULT_LOCAL_LISTEN_ADDRESS: &str = "127.0.0.1:45632";
 const SERVICE_NAME: &str = "KeyGenService";
 const SERVICE_ENV_OPTIONS: [&str; 5] = [
     "KEYGEN_LISTEN_ADDRESS",
@@ -45,6 +46,20 @@ fn configured_cloud_url() -> String {
 
 fn configured_api_token() -> String {
     configured_value("KEYGEN_API_SECRET_TOKEN").unwrap_or_default()
+}
+
+fn configured_local_generate_url() -> AppResult<String> {
+    let listen_address = configured_value("KEYGEN_LISTEN_ADDRESS")
+        .unwrap_or_else(|| DEFAULT_LOCAL_LISTEN_ADDRESS.to_owned());
+    local_generate_url(&listen_address)
+}
+
+fn local_generate_url(listen_address: &str) -> AppResult<String> {
+    let address: SocketAddr = listen_address
+        .trim()
+        .parse()
+        .map_err(|_| "KEYGEN_LISTEN_ADDRESS doit etre une adresse locale valide.".to_owned())?;
+    Ok(format!("http://{address}/generate_key"))
 }
 
 fn configured_value(name: &str) -> Option<String> {
@@ -99,12 +114,13 @@ fn cloud_status(cloud_url: &str, api_token: &str) -> AppResult<String> {
 }
 
 fn generate_key(request_code: &str, app_type: &str, cloud_url: &str) -> AppResult<String> {
+    let local_generate_url = configured_local_generate_url()?;
     let payload = GenerateRequest {
         request_code,
         app_type,
         server_url: cloud_url,
     };
-    let response = ureq::post(LOCAL_GENERATE_URL)
+    let response = ureq::post(&local_generate_url)
         .set("Content-Type", "application/json")
         .timeout(Duration::from_secs(10))
         .send_json(json!(payload))
@@ -665,5 +681,14 @@ mod tests {
             Ok("F81A-67A7-C6AA".to_owned())
         );
         assert!(validate_request_code("f81a67a7c6aa").is_err());
+    }
+
+    #[test]
+    fn builds_local_generation_url_from_service_listener() {
+        assert_eq!(
+            local_generate_url("127.0.0.1:45639"),
+            Ok("http://127.0.0.1:45639/generate_key".to_owned())
+        );
+        assert!(local_generate_url("not-a-socket").is_err());
     }
 }

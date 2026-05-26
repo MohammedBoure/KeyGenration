@@ -3,6 +3,9 @@
 This is the lightweight local backend used by the native Rust interface. It
 exposes the local key-generation endpoint:
 
+The full Arabic operation and deployment guide is in
+[`../README.md`](../README.md).
+
 ```text
 POST http://127.0.0.1:45632/generate_key
 ```
