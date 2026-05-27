@@ -21,6 +21,7 @@ http://127.0.0.1:45632
 {
   "status": "ok",
   "backend_mode": "local-queue-v1",
+  "token_names": ["Restaurant", "Lab", "Jewelry"],
   "authorized": true,
   "maintenance": false,
   "pending_uploads": 0
@@ -30,6 +31,7 @@ http://127.0.0.1:45632
 | الحقل | المعنى |
 | --- | --- |
 | `backend_mode` | إصدار عقد backend الذي تتطلبه الواجهة |
+| `token_names` | أسماء خيارات التوليد المحملة من `.env`، وتستخدمها الواجهة لكشف الحاجة إلى تحديث الخدمة |
 | `authorized` | وجود علامة تفويض التشغيل الأول `AUTHORIZED.txt` |
 | `maintenance` | هل التوليد ممنوع محليا بسبب الحالة `0` |
 | `pending_uploads` | عدد السجلات التي لم تنظف من طابور الرفع بعد |
@@ -48,13 +50,9 @@ http://127.0.0.1:45632
 }
 ```
 
-القيم المقبولة لـ `app_type`:
-
-```text
-Restaurant
-Lab
-Jewelry
-```
+القيم المقبولة لـ `app_type` هي قيم `KEYGEN_TOKEN_<ID>_NAME` المعرفة في
+`.env`. إذا لم يرسل عميل محلي الحقل، تستخدم الخدمة أول token في
+`KEYGEN_TOKEN_IDS`.
 
 الاستجابة الناجحة:
 
@@ -106,6 +104,9 @@ KeyGenService.exe --authorize-install
 | `PGDATABASE` | نعم | لا يوجد | اسم قاعدة البيانات |
 | `PGUSER` | نعم | لا يوجد | حساب المولد المحدود |
 | `PGPASSWORD` | نعم | لا يوجد | كلمة المرور |
+| `KEYGEN_TOKEN_IDS` | نعم | لا يوجد | معرفات tokens مرتبة ومفصولة بفواصل |
+| `KEYGEN_TOKEN_<ID>_NAME` | نعم لكل token | لا يوجد | الاسم الذي تعرضه الواجهة وترسله في `app_type` |
+| `KEYGEN_TOKEN_<ID>_SECRET` | نعم لكل token | لا يوجد | السر الخاص باشتقاق المفتاح |
 | `PGSSLMODE` | لا | `require` | `disable` أو `require` أو `verify-full` |
 | `PGCONNECT_TIMEOUT` | لا | `10` | مهلة الاتصال بالثواني |
 | `KEYGEN_LISTEN_ADDRESS` | لا | `127.0.0.1:45632` | عنوان HTTP المحلي |
@@ -114,8 +115,9 @@ KeyGenService.exe --authorize-install
 | `KEYGEN_DATA_DIR` | لا | `%ProgramData%\KeyGenRMS` | مجلد البيانات |
 | `KEYGEN_PRIMARY_LOG` | لا | `generated_keys.txt` داخل مجلد البيانات | سجل المفاتيح الأساسي |
 
-يتضمن البناء القيم غير السرية الممكنة فقط. تأتي `PGUSER` و`PGPASSWORD`
-من `.env` المحلي أثناء التشغيل/التثبيت.
+يتضمن البناء إعدادات التشغيل المحلية غير السرية الممكنة فقط. تأتي تفاصيل
+PostgreSQL وجميع بيانات tokens، بما فيها الأسماء والأسرار، من `.env` المحلي
+أثناء التشغيل/التثبيت.
 
 ## التخزين المحلي
 

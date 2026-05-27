@@ -1,6 +1,6 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-use keygen_common::{APP_TYPES, RuntimeEnvironment, env_assignment};
+use keygen_common::{GenerationToken, RuntimeEnvironment, TOKEN_IDS_VARIABLE, env_assignment};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::env;
@@ -47,6 +47,7 @@ struct GenerateResponse {
 #[derive(Deserialize)]
 struct HealthResponse {
     backend_mode: Option<String>,
+    token_names: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -88,6 +89,19 @@ fn runtime_environment() -> AppResult<RuntimeEnvironment> {
         .map_err(|error| format!("Lecture du fichier .env impossible: {error}"))
 }
 
+fn configured_generation_tokens() -> AppResult<Vec<GenerationToken>> {
+    runtime_environment()?
+        .generation_tokens()
+        .map_err(|error| format!("Configuration des tokens invalide: {error}"))
+}
+
+fn configured_token_names() -> AppResult<Vec<String>> {
+    Ok(configured_generation_tokens()?
+        .into_iter()
+        .map(|token| token.name)
+        .collect())
+}
+
 fn validate_request_code(value: &str) -> AppResult<String> {
     let request_code = value.trim().to_ascii_uppercase();
     if request_code.len() == 14
@@ -101,6 +115,7 @@ fn validate_request_code(value: &str) -> AppResult<String> {
 }
 
 fn local_service_ready() -> AppResult<()> {
+    let expected_token_names = configured_token_names()?;
     let response = ureq::get(&configured_local_health_url()?)
         .timeout(Duration::from_secs(2))
         .call()
@@ -108,9 +123,12 @@ fn local_service_ready() -> AppResult<()> {
     let health: HealthResponse = response
         .into_json()
         .map_err(|error| format!("Reponse du service local invalide: {error}"))?;
-    match health.backend_mode.as_deref() {
-        Some(REQUIRED_BACKEND_MODE) => Ok(()),
-        _ => Err("Service local obsolete; mise a jour requise.".to_owned()),
+    if health.backend_mode.as_deref() != Some(REQUIRED_BACKEND_MODE) {
+        return Err("Service local obsolete; mise a jour requise.".to_owned());
+    }
+    match health.token_names {
+        Some(names) if names == expected_token_names => Ok(()),
+        _ => Err("Configuration des tokens modifiee; mise a jour du service requise.".to_owned()),
     }
 }
 
@@ -229,12 +247,25 @@ fn verify_install_authorization(service: &Path) -> AppResult<()> {
 
 fn service_environment_contents() -> AppResult<String> {
     let source_environment = runtime_environment()?;
+    let tokens = source_environment
+        .generation_tokens()
+        .map_err(|error| format!("Configuration des tokens invalide: {error}"))?;
     let mut contents =
         "# Generated local service settings for PostgreSQL synchronization.\n".to_owned();
     for name in SERVICE_ENV_OPTIONS {
         if let Some(value) = source_environment.value(name) {
             contents.push_str(&env_assignment(name, &value));
         }
+    }
+    let token_ids = tokens
+        .iter()
+        .map(|token| token.id.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    contents.push_str(&env_assignment(TOKEN_IDS_VARIABLE, &token_ids));
+    for token in tokens {
+        contents.push_str(&env_assignment(&token.name_variable(), &token.name));
+        contents.push_str(&env_assignment(&token.secret_variable(), &token.secret));
     }
     Ok(contents)
 }
@@ -337,6 +368,7 @@ mod gui {
 
     struct Controls {
         app_type: HWND,
+        token_names: Vec<String>,
         code: HWND,
         key: HWND,
         status: HWND,
@@ -350,7 +382,7 @@ mod gui {
     }
 
     pub fn run() -> AppResult<()> {
-        runtime_environment()?;
+        configured_token_names()?;
         unsafe {
             let instance = GetModuleHandleW(null());
             let class_name = wide("ActivateurRmsNativeWindow");
@@ -505,6 +537,7 @@ mod gui {
     }
 
     unsafe fn create_controls(window: HWND) -> Controls {
+        let token_names = configured_token_names().unwrap_or_default();
         label(window, "Logiciel", 24, 20, 130, 22);
         let app_type = CreateWindowExW(
             0,
@@ -520,7 +553,7 @@ mod gui {
             GetModuleHandleW(null()),
             null(),
         );
-        for item in APP_TYPES {
+        for item in &token_names {
             let item = wide(item);
             SendMessageW(app_type, CB_ADDSTRING, 0, item.as_ptr() as _);
         }
@@ -534,6 +567,7 @@ mod gui {
         let status = label(window, "Preparation du service local...", 24, 219, 510, 35);
         Controls {
             app_type,
+            token_names,
             code,
             key,
             status,
@@ -719,7 +753,10 @@ mod gui {
             }
         };
         let selection = SendMessageW(controls.app_type, CB_GETCURSEL, 0, 0) as usize;
-        let app_type = APP_TYPES.get(selection).copied().unwrap_or("Restaurant");
+        let Some(app_type) = controls.token_names.get(selection) else {
+            set_text(controls.status, "Aucun token de generation configure.");
+            return;
+        };
         set_text(controls.status, "Generation en cours...");
         UpdateWindow(controls.status);
         match generate_key(&request_code, app_type) {

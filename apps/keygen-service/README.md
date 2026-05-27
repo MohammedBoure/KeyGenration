@@ -12,6 +12,8 @@ Permanent local backend installed with NSSM by the desktop application.
   refreshes it from PostgreSQL whenever connectivity is available.
 - Generates activation keys locally, including while offline if the last known
   state permits generation.
+- Reads the selectable product names and their private generation tokens from
+  its installed `.env`; no product token is compiled into the executable.
 - Saves generated keys locally and appends records to `pending_uploads.json`.
 - Repeatedly attempts to insert pending records into PostgreSQL, clearing the
   queue only after a committed upload.
@@ -34,7 +36,7 @@ receives an internal generated `.env` containing:
 
 ```dotenv
 PGHOST=database-host
-PGPORT=9005
+PGPORT=replace-with-postgresql-port
 PGDATABASE=keygen_restaurant
 PGUSER=restricted_client_user
 PGPASSWORD=restricted_client_password
@@ -43,7 +45,16 @@ PGCONNECT_TIMEOUT=10
 KEYGEN_LISTEN_ADDRESS=127.0.0.1:45632
 KEYGEN_STATUS_INTERVAL_SECONDS=15
 KEYGEN_UPLOAD_INTERVAL_SECONDS=5
+KEYGEN_TOKEN_IDS=restaurant,lab,jewelry
+KEYGEN_TOKEN_RESTAURANT_NAME=Restaurant
+KEYGEN_TOKEN_RESTAURANT_SECRET=replace-with-private-restaurant-token
+KEYGEN_TOKEN_LAB_NAME=Lab
+KEYGEN_TOKEN_LAB_SECRET=replace-with-private-lab-token
+KEYGEN_TOKEN_JEWELRY_NAME=Jewelry
+KEYGEN_TOKEN_JEWELRY_SECRET=replace-with-private-jewelry-token
 ```
 
 Use a restricted database account in any distributed build: it must not own
-the database or be allowed to change `server_control`.
+the database or be allowed to change `server_control`. To add a product, append
+an identifier to `KEYGEN_TOKEN_IDS`, add its `NAME` and `SECRET` variables,
+then reinstall/update the service through `ActivateurRMS.exe --install`.

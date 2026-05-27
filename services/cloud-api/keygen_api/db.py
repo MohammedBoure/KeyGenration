@@ -5,10 +5,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 
-DEFAULT_DB_HOST = "sw4.duckdns.org"
-DEFAULT_DB_PORT = "9005"
-DEFAULT_DB_NAME = "keygen_restaurant"
-DEFAULT_DB_USER = "keygen_app"
+REQUIRED_CONNECTION_SETTINGS = ("PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD")
 
 
 def get_db_connection():
@@ -20,16 +17,21 @@ def get_db_connection():
     if database_url:
         return psycopg2.connect(database_url, **options)
 
-    password = os.environ.get("PGPASSWORD")
-    if not password:
-        raise RuntimeError("PGPASSWORD is required to connect to PostgreSQL.")
+    settings = {
+        name: os.environ.get(name, "").strip() for name in REQUIRED_CONNECTION_SETTINGS
+    }
+    missing = [name for name, value in settings.items() if not value]
+    if missing:
+        raise RuntimeError(
+            f"{', '.join(missing)} must be defined in .env to connect to PostgreSQL."
+        )
 
     return psycopg2.connect(
-        host=os.environ.get("PGHOST", DEFAULT_DB_HOST),
-        port=os.environ.get("PGPORT", DEFAULT_DB_PORT),
-        dbname=os.environ.get("PGDATABASE", DEFAULT_DB_NAME),
-        user=os.environ.get("PGUSER", DEFAULT_DB_USER),
-        password=password,
+        host=settings["PGHOST"],
+        port=settings["PGPORT"],
+        dbname=settings["PGDATABASE"],
+        user=settings["PGUSER"],
+        password=settings["PGPASSWORD"],
         **options,
     )
 

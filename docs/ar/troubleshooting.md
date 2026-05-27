@@ -48,6 +48,7 @@ sc.exe qc KeyGenService
 | خطأ اتصال PostgreSQL | إنترنت غير متاح أو `.env` خاطئ | راجع `PGHOST` و`PGPORT` وSSL وكلمة المرور |
 | رفض UAC | لم تمنح صلاحية Administrator | أعد تشغيل `--install` ووافق على UAC |
 | Backend مفقود أو NSSM مفقود | الحزمة ناقصة | أعد نسخ الحزمة كاملة دون فصل المجلدات |
+| `Configuration des tokens invalide` | إعداد token ناقص أو متكرر | راجع `KEYGEN_TOKEN_IDS` وحقلي `NAME` و`SECRET` لكل معرف |
 
 ## الواجهة تفتح لكن التوليد لا يعمل
 
@@ -111,7 +112,7 @@ Invoke-RestMethod http://127.0.0.1:45632/health
 
 ## موقع FastAPI لا يبدأ أو لا يعرض البيانات
 
-### خطأ `PGPASSWORD is required`
+### خطأ إعدادات PostgreSQL المطلوبة في `.env`
 
 أنشئ الملف:
 
@@ -120,7 +121,8 @@ cd .\services\cloud-api
 Copy-Item .\.env.example .\.env
 ```
 
-ثم ضع بيانات الاتصال الفعلية في `.env`.
+ثم ضع بيانات الاتصال الفعلية لكل من `PGHOST` و`PGPORT` و`PGDATABASE`
+و`PGUSER` و`PGPASSWORD` في `.env`.
 
 ### الموقع يعمل لكن الطلبات من جهاز آخر مرفوضة
 

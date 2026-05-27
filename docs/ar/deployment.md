@@ -68,7 +68,7 @@ GRANT USAGE, SELECT ON SEQUENCE activation_logs_id_seq TO restricted_client_user
 
 ```dotenv
 PGHOST=database-host
-PGPORT=9005
+PGPORT=database-port
 PGDATABASE=keygen_restaurant
 PGUSER=restricted_client_user
 PGPASSWORD=restricted_client_password
@@ -77,7 +77,19 @@ PGCONNECT_TIMEOUT=10
 KEYGEN_LISTEN_ADDRESS=127.0.0.1:45632
 KEYGEN_STATUS_INTERVAL_SECONDS=15
 KEYGEN_UPLOAD_INTERVAL_SECONDS=5
+KEYGEN_TOKEN_IDS=restaurant,lab,jewelry
+KEYGEN_TOKEN_RESTAURANT_NAME=Restaurant
+KEYGEN_TOKEN_RESTAURANT_SECRET=replace-with-private-restaurant-token
+KEYGEN_TOKEN_LAB_NAME=Lab
+KEYGEN_TOKEN_LAB_SECRET=replace-with-private-lab-token
+KEYGEN_TOKEN_JEWELRY_NAME=Jewelry
+KEYGEN_TOKEN_JEWELRY_SECRET=replace-with-private-jewelry-token
 ```
+
+`KEYGEN_TOKEN_IDS` قائمة مرتبة قابلة للتوسعة. لكل معرف فيها يجب وجود
+`KEYGEN_TOKEN_<ID>_NAME` للاسم الظاهر في الواجهة و
+`KEYGEN_TOKEN_<ID>_SECRET` للسر المستخدم في اشتقاق المفتاح. راجع
+[إعداد tokens السرية](tokens.md).
 
 متغيرات اختيارية متقدمة:
 
@@ -92,7 +104,7 @@ KEYGEN_UPLOAD_INTERVAL_SECONDS=5
 
 ```dotenv
 PGHOST=database-host
-PGPORT=9005
+PGPORT=database-port
 PGDATABASE=keygen_restaurant
 PGUSER=administrator_or_dashboard_user
 PGPASSWORD=database-password
@@ -127,8 +139,8 @@ dist\windows\ActivateurRMS\
 
 أداة التغليف:
 
-- تضمّن القيم غير السرية فقط في التنفيذيات.
-- لا تضمّن `PGUSER` أو `PGPASSWORD`.
+- تضمّن القيم المحلية التشغيلية غير السرية فقط في التنفيذيات.
+- لا تضمّن تفاصيل اتصال PostgreSQL ولا أسماء أو أسرار tokens.
 - تحذف أي `.env` أو `.env.example` قديم من مجلد الناتج.
 
 بعد نقل الحزمة إلى الجهاز الذي تديره، ضع `.env` الحقيقي بجانب
@@ -143,7 +155,7 @@ cd .\ActivateurRMS
 
 السلوك:
 
-1. يقرأ `.env` المحلي.
+1. يقرأ `.env` المحلي، بما فيه قائمة tokens وأسرار التوليد.
 2. يطلب من backend المرفق تفويض التثبيت عبر PostgreSQL.
 3. لا يتابع إلا إذا كانت الحالة `1`.
 4. يطلب Administrator/UAC.
@@ -152,7 +164,8 @@ cd .\ActivateurRMS
 7. يسجل الخدمة كخدمة تلقائية ويبدأها.
 8. يتأكد من أن backend يجيب محليا.
 
-نفذ الأمر نفسه عند تحديث الحزمة؛ النسخ فقط لا يحدث الخدمة المثبتة.
+نفذ الأمر نفسه عند تحديث الحزمة؛ النسخ فقط لا يحدث الخدمة المثبتة. ونفذه
+كذلك بعد إضافة token أو تغيير اسمه أو سرّه.
 
 ## إزالة الخدمة
 

@@ -1,5 +1,5 @@
 use chrono::{SecondsFormat, Utc};
-use keygen_common::RuntimeEnvironment;
+use keygen_common::{GenerationToken, RuntimeEnvironment};
 use native_tls::TlsConnector;
 use postgres::config::SslMode;
 use postgres::{Client, Config as PostgresConfig, NoTls};
@@ -20,13 +20,10 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 const DEFAULT_LISTEN_ADDRESS: &str = "127.0.0.1:45632";
 const BACKEND_MODE: &str = "local-queue-v1";
-const RESTAURANT_SECRET: &str = "RestaurantManagement";
-const LAB_SECRET: &str = "LabInventoryManagement";
-const JEWELRY_SECRET: &str = "JewelryManagement";
 
 type AppResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct DatabaseConfig {
     host: String,
     port: u16,
@@ -98,9 +95,10 @@ impl DatabaseConfig {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct Config {
     database: DatabaseConfig,
+    tokens: Vec<GenerationToken>,
     listen_address: String,
     status_interval: Duration,
     upload_interval: Duration,
@@ -110,6 +108,7 @@ impl Config {
     fn from_environment(environment: &RuntimeEnvironment) -> AppResult<Self> {
         Ok(Self {
             database: DatabaseConfig::from_environment(environment)?,
+            tokens: environment.generation_tokens()?,
             listen_address: environment
                 .value("KEYGEN_LISTEN_ADDRESS")
                 .unwrap_or_else(|| DEFAULT_LISTEN_ADDRESS.to_owned()),
@@ -337,7 +336,7 @@ struct GenerateRequest {
     app_type: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
 struct PendingUpload {
     #[serde(default)]
     sync_id: String,
@@ -363,7 +362,9 @@ impl PendingUpload {
 fn main() -> AppResult<()> {
     let environment = RuntimeEnvironment::load()?;
     if env::args().any(|argument| argument == "--authorize-install") {
-        DatabaseConfig::from_environment(&environment)?.require_active_installation()?;
+        Config::from_environment(&environment)?
+            .database
+            .require_active_installation()?;
         println!("Installation authorized by PostgreSQL status.");
         return Ok(());
     }
@@ -423,6 +424,9 @@ fn handle_request(mut request: Request, state: &Arc<AppState>) {
             &json!({
                 "status": "ok",
                 "backend_mode": BACKEND_MODE,
+                "token_names": state.config.tokens.iter()
+                    .map(|token| token.name.as_str())
+                    .collect::<Vec<_>>(),
                 "authorized": state.paths.authorization_file.exists(),
                 "maintenance": state.is_in_maintenance(),
                 "pending_uploads": load_pending_uploads(&state.paths.pending_uploads)
@@ -463,8 +467,13 @@ fn generate_key_response(request: &mut Request, state: &Arc<AppState>) -> (u16, 
             json!({"error": "Invalid request_code format. Expected 'XXXX-XXXX-XXXX'."}),
         );
     }
-    let app_type = payload.app_type.as_deref().unwrap_or("Restaurant");
-    let Some(activation_key) = generate_activation_key(&request_code, app_type) else {
+    let app_type = payload
+        .app_type
+        .as_deref()
+        .unwrap_or_else(|| state.config.tokens[0].name.as_str());
+    let Some(activation_key) =
+        generate_activation_key(&request_code, app_type, &state.config.tokens)
+    else {
         return (400, json!({"error": "Invalid app_type."}));
     };
     let client_ip = request
@@ -499,13 +508,12 @@ fn respond_json(request: Request, status_code: u16, body: &Value) {
     }
 }
 
-fn generate_activation_key(request_code: &str, app_type: &str) -> Option<String> {
-    let secret = match app_type {
-        "Restaurant" => RESTAURANT_SECRET,
-        "Lab" => LAB_SECRET,
-        "Jewelry" => JEWELRY_SECRET,
-        _ => return None,
-    };
+fn generate_activation_key(
+    request_code: &str,
+    app_type: &str,
+    tokens: &[GenerationToken],
+) -> Option<String> {
+    let secret = &tokens.iter().find(|token| token.name == app_type)?.secret;
     let digest = Sha256::digest(format!("{request_code}::{secret}").as_bytes());
     let encoded = digest
         .iter()
@@ -591,20 +599,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generates_expected_keys_locally_for_supported_products() {
-        assert_eq!(
-            generate_activation_key("F81A-67A7-C6AA", "Restaurant"),
-            Some("EE8C-551F-0A90-73F5".to_owned())
-        );
-        assert_eq!(
-            generate_activation_key("F81A-67A7-C6AA", "Lab"),
-            Some("F74D-9047-9117-B8AF".to_owned())
-        );
-        assert_eq!(
-            generate_activation_key("F81A-67A7-C6AA", "Jewelry"),
-            Some("EF4E-047E-2AF5-63B7".to_owned())
-        );
-        assert!(generate_activation_key("F81A-67A7-C6AA", "Unknown").is_none());
+    fn generates_keys_from_configured_tokens_only() {
+        let tokens = vec![
+            GenerationToken {
+                id: "FIRST".to_owned(),
+                name: "First Product".to_owned(),
+                secret: "private-first-value".to_owned(),
+            },
+            GenerationToken {
+                id: "SECOND".to_owned(),
+                name: "Second Product".to_owned(),
+                secret: "private-second-value".to_owned(),
+            },
+        ];
+        let first = generate_activation_key("F81A-67A7-C6AA", "First Product", &tokens).unwrap();
+        let first_again =
+            generate_activation_key("F81A-67A7-C6AA", "First Product", &tokens).unwrap();
+        let second = generate_activation_key("F81A-67A7-C6AA", "Second Product", &tokens).unwrap();
+
+        assert_eq!(first, first_again);
+        assert_ne!(first, second);
+        assert_eq!(first.len(), 19);
+        assert!(generate_activation_key("F81A-67A7-C6AA", "Unknown", &tokens).is_none());
     }
 
     #[test]

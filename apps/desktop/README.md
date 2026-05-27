@@ -20,6 +20,8 @@ Native Windows Rust interface and NSSM installer.
   its health check.
 - Once installed, sends generation requests to the local service at
   `http://127.0.0.1:45632/generate_key`.
+- Loads the selectable product names from the private `.env` token list and
+  requires a service update when that list changes.
 
 The UI does not generate keys or write to PostgreSQL itself.
 
@@ -43,8 +45,9 @@ cargo build --release -p activateur-rms
 .\packaging\windows\package.cmd -SkipBuild
 ```
 
-During packaging, only non-secret defaults are embedded. On the computer where
-the tool is run, put a configured `.env` beside `ActivateurRMS.exe`. The UI
-passes that local configuration to the authorization check and writes it to
-the installed service directory; the packaged executables do not embed the
-PostgreSQL username or password.
+During packaging, only non-secret local behavior defaults are embedded. On the
+computer where the tool is run, put a configured `.env` beside
+`ActivateurRMS.exe`. The UI passes that local configuration to the
+authorization check and writes it to the installed service directory; the
+packaged executables do not embed PostgreSQL connection details or generation
+tokens.
