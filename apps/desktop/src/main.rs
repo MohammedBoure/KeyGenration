@@ -436,11 +436,12 @@ mod gui {
                 return;
             }
         };
+        let mut service_needs_repair = false;
 
         if matches!(registered_service, RegisteredServiceState::Stopped) {
             set_text(controls.status, "Demarrage du service local installe...");
             UpdateWindow(controls.status);
-            if let Err(error) = start_registered_service() {
+            if start_registered_service().is_err() {
                 if IsUserAnAdmin() == 0 {
                     set_text(
                         controls.status,
@@ -451,13 +452,17 @@ mod gui {
                     }
                     return;
                 }
-                set_text(controls.status, &error);
-                message_box(window, "Demarrage du service impossible", &error);
-                return;
+                service_needs_repair = true;
+                set_text(
+                    controls.status,
+                    "Service local endommage; verification avant reparation...",
+                );
+                UpdateWindow(controls.status);
             }
         }
 
-        if !matches!(registered_service, RegisteredServiceState::Missing)
+        if !service_needs_repair
+            && !matches!(registered_service, RegisteredServiceState::Missing)
             && wait_for_local_service()
         {
             set_text(

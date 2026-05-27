@@ -8,6 +8,8 @@ Native Windows Rust interface and NSSM installer.
   installed through NSSM is registered, then checks its local health endpoint.
 - If the registered service is stopped, attempts to start it without requiring
   a fresh PostgreSQL authorization.
+- If a registered service is broken or its executable is missing, follows the
+  authorized installation path to replace it with the bundled Rust service.
 - Accepts only the current `local-queue-v1` backend mode; an obsolete installed
   service is upgraded through the normal installation path.
 - When no current service is installed, runs
