@@ -1,33 +1,52 @@
-# البناء والتشغيل
+# البناء والنشر والتشغيل الإداري
 
-لا توجد خدمة Cloud API عامة في هذا التصميم. خدمة Rust المثبتة تتصل مباشرة
-بـ PostgreSQL، ولوحة FastAPI مخصصة للتشغيل المحلي على جهاز الإدارة.
+## المعمارية المطلوبة للنشر
 
-## إعداد PostgreSQL ولوحة الإدارة المحلية
+لا تنشر Cloud API للمولد. المطلوب هو:
 
-من مجلد `services\cloud-api`، وهو اسم تاريخي للمجلد:
+| الموقع | ما يشغل فيه |
+| --- | --- |
+| خادم بعيد | PostgreSQL فقط |
+| جهاز المولد | حزمة Rust وخدمة NSSM المحلية |
+| جهاز المدير | لوحة FastAPI المحلية عند الحاجة |
+
+خدمة Rust ولوحة FastAPI تستعملان اتصالات PostgreSQL مستقلة. لا تحتاج لوحة
+FastAPI أن تكون مفتوحة كي يعمل مولد المفاتيح.
+
+## متطلبات البناء
+
+- Windows لبناء وتشغيل حزمة `exe` وخدمة NSSM.
+- Rust/Cargo لتجميع الواجهة والخدمة.
+- Python 3 و`pip` لتشغيل لوحة الإدارة المحلية واختبارها.
+- PostgreSQL قابل للاتصال عبر SSL من أجهزة التشغيل المعتمدة.
+
+## إعداد PostgreSQL
+
+### الجداول
+
+من جذر المشروع:
 
 ```powershell
+cd .\services\cloud-api
+python -m pip install -r .\requirements.txt
 Copy-Item .\.env.example .\.env
-# ضع بيانات PostgreSQL الفعلية في .env
+# حرر .env ببيانات حساب يستطيع إنشاء/تهيئة الجداول.
 python .\app.py --init-db-only
-python .\fastapi_app.py
 ```
 
-ثم افتح:
+ينشئ الأمر أو يحدث:
 
 ```text
-http://127.0.0.1:8080/
+server_control     حالة التشغيل الوحيدة id=1, status='0' أو '1'
+activation_logs    سجلات المفاتيح المرفوعة من الأجهزة
 ```
 
-تقرأ اللوحة سجلات `activation_logs` وتغير قيمة `server_control.status`
-بين `1` و`0`.
+تضاف قيمة البداية `server_control.status='1'` إن لم يكن صف التحكم موجودا.
 
-## حساب البرنامج الموزع
+### فصل حساب الإدارة عن حساب المولد
 
-تقرأ خدمة Rust بيانات الاتصال من ملف `.env` المحلي في جهاز التشغيل؛ ولا
-يضمّن البناء اسم المستخدم أو كلمة المرور في `exe`. مع ذلك لا تستخدم الحساب
-الإداري أو حساب مالك القاعدة على جهاز غير موثوق. الحساب المحدود يحتاج فقط:
+ملف `.env` الخاص بلوحة الإدارة يحتاج صلاحية قراءة السجلات وتعديل الحالة.
+أما ملف `.env` الذي يوضع مع حزمة المولد فيجب أن يستعمل حسابا محدودا، مثلا:
 
 ```sql
 GRANT CONNECT ON DATABASE keygen_restaurant TO restricted_client_user;
@@ -37,7 +56,50 @@ GRANT INSERT ON TABLE activation_logs TO restricted_client_user;
 GRANT USAGE, SELECT ON SEQUENCE activation_logs_id_seq TO restricted_client_user;
 ```
 
-يجب ألا يمتلك هذا الحساب صلاحية `UPDATE` على `server_control`.
+لا تمنح حساب المولد `UPDATE` على `server_control` ولا صلاحيات حذف السجلات.
+
+## إعداد ملفات البيئة
+
+### ملف المولد
+
+أنشئ `packaging\windows\.env` للبناء المحلي، ثم ضع ملفا فعليا مماثلا بجانب
+الحزمة على الجهاز الموثوق:
+
+```dotenv
+PGHOST=database-host
+PGPORT=9005
+PGDATABASE=keygen_restaurant
+PGUSER=restricted_client_user
+PGPASSWORD=restricted_client_password
+PGSSLMODE=require
+PGCONNECT_TIMEOUT=10
+KEYGEN_LISTEN_ADDRESS=127.0.0.1:45632
+KEYGEN_STATUS_INTERVAL_SECONDS=15
+KEYGEN_UPLOAD_INTERVAL_SECONDS=5
+```
+
+متغيرات اختيارية متقدمة:
+
+| المتغير | الوظيفة |
+| --- | --- |
+| `KEYGEN_DATA_DIR` | تغيير مجلد ملفات البيانات المحلي |
+| `KEYGEN_PRIMARY_LOG` | تغيير مسار سجل `generated_keys.txt` |
+
+### ملف لوحة الإدارة
+
+في `services\cloud-api\.env`:
+
+```dotenv
+PGHOST=database-host
+PGPORT=9005
+PGDATABASE=keygen_restaurant
+PGUSER=administrator_or_dashboard_user
+PGPASSWORD=database-password
+PGSSLMODE=require
+PGCONNECT_TIMEOUT=10
+ADMIN_WEB_HOST=127.0.0.1
+ADMIN_WEB_PORT=8080
+```
 
 ## بناء حزمة Windows
 
@@ -45,6 +107,7 @@ GRANT USAGE, SELECT ON SEQUENCE activation_logs_id_seq TO restricted_client_user
 
 ```powershell
 Copy-Item .\packaging\windows\client.env.example .\packaging\windows\.env
+# حرر packaging\windows\.env دون مشاركته.
 cargo fmt --all
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
@@ -61,30 +124,70 @@ dist\windows\ActivateurRMS\
 `-- nssm\nssm.exe
 ```
 
-لا تضمّن الحزمة `PGUSER` أو `PGPASSWORD`. على جهاز التشغيل الذي تديره، انسخ
-القالب كملف `.env` بجانب `ActivateurRMS.exe` وضع بيانات PostgreSQL فيه. بعد
-التثبيت تحفظ الخدمة إعدادها المحلي داخل `%ProgramFiles%\KeyGenRMS\.env`.
-أداة التغليف تحذف أي ملف `.env` قديم من مجلد الناتج لمنع تسليم بيانات
-الاتصال بالخطأ؛ أضفه محليا فقط بعد نقل البرنامج إلى جهاز التشغيل.
+أداة التغليف:
 
-على جهاز التشغيل يمكن تثبيت أو حذف خدمة backend من الطرفية:
+- تضمّن القيم غير السرية فقط في التنفيذيات.
+- لا تضمّن `PGUSER` أو `PGPASSWORD`.
+- تحذف أي `.env` أو `.env.example` قديم من مجلد الناتج.
+
+بعد نقل الحزمة إلى الجهاز الذي تديره، ضع `.env` الحقيقي بجانب
+`ActivateurRMS.exe`. لا تُسلّم نسخة تحتوي `.env` إلى جهاز غير موثوق.
+
+## تثبيت أو تحديث الخدمة على جهاز المولد
 
 ```powershell
+cd .\ActivateurRMS
 .\ActivateurRMS.exe --install
+```
+
+السلوك:
+
+1. يقرأ `.env` المحلي.
+2. يطلب من backend المرفق تفويض التثبيت عبر PostgreSQL.
+3. لا يتابع إلا إذا كانت الحالة `1`.
+4. يطلب Administrator/UAC.
+5. يوقف ويزيل أي خدمة قديمة بالاسم نفسه.
+6. ينسخ الملفات إلى `%ProgramFiles%\KeyGenRMS`.
+7. يسجل الخدمة كخدمة تلقائية ويبدأها.
+8. يتأكد من أن backend يجيب محليا.
+
+نفذ الأمر نفسه عند تحديث الحزمة؛ النسخ فقط لا يحدث الخدمة المثبتة.
+
+## إزالة الخدمة
+
+```powershell
 .\ActivateurRMS.exe --uninstall
 ```
 
-الأمر `--unstall` مقبول أيضا للإزالة، ولا تحذف الإزالة سجلات
-`%ProgramData%\KeyGenRMS`.
+أو:
 
-## اختبار دورة التشغيل
+```powershell
+.\ActivateurRMS.exe --unstall
+```
+
+تحذف الإزالة خدمة Windows وملفات `%ProgramFiles%\KeyGenRMS`، لكنها لا
+تحذف `%ProgramData%\KeyGenRMS`. افحص `pending_uploads.json` قبل حذف ملفات
+البيانات يدويا، فقد يحتوي على سجلات لم ترفع بعد.
+
+## تشغيل لوحة الإدارة
+
+```powershell
+cd .\services\cloud-api
+python .\fastapi_app.py
+```
+
+افتح `http://127.0.0.1:8080/`. لتفاصيل التحكم والمسارات راجع
+[لوحة FastAPI المحلية](local-dashboard.md).
+
+## اختبار قبول النشر
 
 1. اجعل الحالة `1` من لوحة الإدارة.
-2. شغل الواجهة على جهاز اختبار واتركها تثبت خدمة NSSM.
-3. تحقق من إنشاء `%ProgramData%\KeyGenRMS\AUTHORIZED.txt` بعد التشغيل الأول.
-4. أنشئ مفتاحا وتحقق من ظهوره في اللوحة بعد المزامنة.
-5. افصل الاتصال وأنشئ مفتاحا؛ تحقق من وجوده في `pending_uploads.json`.
-6. أعد الاتصال وتحقق من رفع السجل.
-7. غيّر الحالة إلى `0` أثناء اتصال الجهاز؛ بعد وصولها للخدمة يجب أن ترفض
-   المفاتيح الجديدة.
-8. أعد الحالة إلى `1` وتحقق من عودة التوليد.
+2. نفذ `ActivateurRMS.exe --install` على جهاز اختبار.
+3. تحقق من تشغيل خدمة Windows باسم `KeyGenService`.
+4. تحقق من إنشاء `%ProgramData%\KeyGenRMS\AUTHORIZED.txt`.
+5. أنشئ مفتاحا وتأكد من ظهوره في لوحة الإدارة.
+6. افصل الاتصال وأنشئ مفتاحا، ثم تحقق من وجوده في `pending_uploads.json`.
+7. أعد الاتصال وتأكد من اختفاء العنصر المعلق وظهوره في PostgreSQL.
+8. غيّر الحالة إلى `0` أثناء اتصال الجهاز وتأكد من رفض توليد جديد.
+9. افصل الشبكة وتأكد أن الرفض يبقى فعالا بعد وصول `0`.
+10. أعد الحالة إلى `1` وتأكد من عودة التوليد بعد اتصال الجهاز.

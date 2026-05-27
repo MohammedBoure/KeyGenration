@@ -1,7 +1,47 @@
-# Documentation
+# توثيق Activateur RMS
 
-- [دليل استخدام العميل](ar/usage.md)
-- [دليل النشر والبناء](ar/deployment.md)
-- [لوحة المراقبة المحلية بـ FastAPI](ar/local-dashboard.md)
-- [دليل الأمان](ar/security.md)
-- [API reference](api.md)
+هذا المجلد هو المرجع التشغيلي والتقني للنسخة الحالية. التصميم الحالي لا
+يستخدم Cloud API عامة: توجد خدمة Rust محلية دائمة على جهاز المولد، ولوحة
+FastAPI محلية منفصلة على جهاز الإدارة، وكلتاهما تتصلان بقاعدة PostgreSQL.
+
+## ابدأ من هنا
+
+| احتياجك | الدليل |
+| --- | --- |
+| فهم كيف تتصل الأجزاء ببعضها | [المعمارية وتدفق البيانات](ar/architecture.md) |
+| تشغيل المولد اليومي أو إدارة خدمته | [دليل الاستخدام](ar/usage.md) |
+| إنشاء قاعدة البيانات وبناء/توزيع الحزمة | [البناء والنشر](ar/deployment.md) |
+| تشغيل موقع الإدارة المحلي وتغيير الحالة | [لوحة FastAPI المحلية](ar/local-dashboard.md) |
+| معالجة رسالة خطأ أو طابور لا يفرغ | [استكشاف الأخطاء](ar/troubleshooting.md) |
+| فهم مخاطر `.env` والعمل offline | [الأمان وحدود التحكم](ar/security.md) |
+| تطوير التكامل HTTP/SQL | [مرجع الواجهات والتخزين](api.md) |
+
+## خريطة سريعة
+
+```text
+ActivateurRMS.exe  -->  KeyGenService.exe/NSSM  -->  PostgreSQL
+                               ^
+                               | لا اتصال HTTP خارجي
+
+FastAPI محلي على جهاز الإدارة  ----------------->  PostgreSQL
+```
+
+## الكلمات المستخدمة
+
+| الاسم | المقصود |
+| --- | --- |
+| الواجهة | `ActivateurRMS.exe` الذي يستخدمه مولد المفاتيح |
+| backend المحلي | `KeyGenService.exe` المثبت كخدمة Windows عبر NSSM |
+| الموقع المحلي | تطبيق FastAPI المستخدم للمتابعة والتحكم من المتصفح |
+| الخادم البعيد | قاعدة PostgreSQL فقط، وليس API لتوليد المفاتيح |
+| الحالة | قيمة `server_control.status`: إما `1` أو `0` |
+
+## مواقع الملفات المهمة
+
+| المسار | الاستخدام |
+| --- | --- |
+| `apps\desktop` | مصدر واجهة Rust وأوامر تثبيت الخدمة |
+| `apps\keygen-service` | مصدر backend Rust المحلي |
+| `services\cloud-api` | اسم تاريخي لمصدر لوحة FastAPI المحلية وتهيئة PostgreSQL |
+| `packaging\windows` | حزمة Windows وNSSM وأداة التغليف |
+| `dist\windows\ActivateurRMS` | ناتج التجميع عند البناء محليا |
