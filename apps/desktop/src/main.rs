@@ -10,40 +10,40 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-const DEFAULT_CLOUD_API_URL: &str = "https://activation.example.com";
 const DEFAULT_LOCAL_LISTEN_ADDRESS: &str = "127.0.0.1:45632";
 const SERVICE_NAME: &str = "KeyGenService";
-const SERVICE_ENV_OPTIONS: [&str; 4] = [
+const REQUIRED_BACKEND_MODE: &str = "local-queue-v1";
+const SERVICE_ENV_OPTIONS: [&str; 12] = [
+    "PGHOST",
+    "PGPORT",
+    "PGDATABASE",
+    "PGUSER",
+    "PGPASSWORD",
+    "PGSSLMODE",
+    "PGCONNECT_TIMEOUT",
     "KEYGEN_LISTEN_ADDRESS",
     "KEYGEN_DATA_DIR",
     "KEYGEN_PRIMARY_LOG",
     "KEYGEN_STATUS_INTERVAL_SECONDS",
+    "KEYGEN_UPLOAD_INTERVAL_SECONDS",
 ];
 
 type AppResult<T> = Result<T, String>;
-
-#[derive(Deserialize)]
-struct ServerStatus {
-    status: String,
-}
 
 #[derive(Deserialize)]
 struct GenerateResponse {
     activation_key: String,
 }
 
+#[derive(Deserialize)]
+struct HealthResponse {
+    backend_mode: Option<String>,
+}
+
 #[derive(Serialize)]
 struct GenerateRequest<'a> {
     request_code: &'a str,
     app_type: &'a str,
-}
-
-fn configured_cloud_url() -> String {
-    configured_value("KEYGEN_CLOUD_API_URL").unwrap_or_else(|| DEFAULT_CLOUD_API_URL.to_owned())
-}
-
-fn configured_api_token() -> String {
-    configured_value("KEYGEN_API_SECRET_TOKEN").unwrap_or_default()
 }
 
 fn configured_local_generate_url() -> AppResult<String> {
@@ -79,17 +79,6 @@ fn runtime_environment() -> AppResult<RuntimeEnvironment> {
         .map_err(|error| format!("Lecture du fichier .env impossible: {error}"))
 }
 
-fn validate_cloud_url(url: &str) -> AppResult<String> {
-    let trimmed = url.trim().trim_end_matches('/');
-    if (trimmed.starts_with("http://") || trimmed.starts_with("https://"))
-        && !trimmed.chars().any(char::is_whitespace)
-    {
-        Ok(trimmed.to_owned())
-    } else {
-        Err("L'URL cloud doit commencer par http:// ou https://.".to_owned())
-    }
-}
-
 fn validate_request_code(value: &str) -> AppResult<String> {
     let request_code = value.trim().to_ascii_uppercase();
     if request_code.len() == 14
@@ -102,46 +91,18 @@ fn validate_request_code(value: &str) -> AppResult<String> {
     }
 }
 
-fn cloud_status(cloud_url: &str, api_token: &str) -> AppResult<String> {
-    if api_token.trim().is_empty() {
-        return Err("Configuration API absente de l'application.".to_owned());
-    }
-    let url = format!("{cloud_url}/api/v1/server-status");
-    let response = ureq::get(&url)
-        .set("Authorization", &format!("Bearer {}", api_token.trim()))
-        .set("Content-Type", "application/json")
-        .timeout(Duration::from_secs(12))
-        .call()
-        .map_err(|error| format!("Verification cloud impossible: {error}"))?;
-    let status: ServerStatus = response
-        .into_json()
-        .map_err(|error| format!("Reponse cloud invalide: {error}"))?;
-    Ok(status.status)
-}
-
-fn require_active_cloud_status(cloud_url: &str, api_token: &str) -> AppResult<()> {
-    require_active_cloud_status_value(&cloud_status(cloud_url, api_token)?)
-}
-
-fn require_active_cloud_status_value(status: &str) -> AppResult<()> {
-    match status.trim() {
-        "1" => Ok(()),
-        "0" => Err("Ce generateur a ete desactive par l'administrateur.".to_owned()),
-        _ => Err("Etat d'autorisation distant invalide.".to_owned()),
-    }
-}
-
-fn verify_startup_authorization() -> AppResult<()> {
-    let cloud_url = validate_cloud_url(&configured_cloud_url())?;
-    require_active_cloud_status(&cloud_url, &configured_api_token())
-}
-
 fn local_service_ready() -> AppResult<()> {
-    ureq::get(&configured_local_health_url()?)
+    let response = ureq::get(&configured_local_health_url()?)
         .timeout(Duration::from_secs(2))
         .call()
-        .map(|_| ())
-        .map_err(|error| format!("Service local indisponible: {error}"))
+        .map_err(|error| format!("Service local indisponible: {error}"))?;
+    let health: HealthResponse = response
+        .into_json()
+        .map_err(|error| format!("Reponse du service local invalide: {error}"))?;
+    match health.backend_mode.as_deref() {
+        Some(REQUIRED_BACKEND_MODE) => Ok(()),
+        _ => Err("Service local obsolete; mise a jour requise.".to_owned()),
+    }
 }
 
 fn generate_key(request_code: &str, app_type: &str) -> AppResult<String> {
@@ -200,12 +161,31 @@ fn run_optional(program: &Path, arguments: &[&str]) {
     let _ = Command::new(program).args(arguments).output();
 }
 
-fn service_environment_contents(cloud_url: &str, api_token: &str) -> AppResult<String> {
+fn verify_install_authorization(service: &Path) -> AppResult<()> {
+    let environment = runtime_environment()?;
+    let mut command = Command::new(service);
+    command.arg("--authorize-install");
+    if environment.exists() {
+        command.env("KEYGEN_ENV_FILE", environment.path());
+    }
+    let output = command
+        .output()
+        .map_err(|error| format!("Verification PostgreSQL impossible: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let details = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    if details.is_empty() {
+        Err("Installation interdite ou connexion PostgreSQL indisponible.".to_owned())
+    } else {
+        Err(details)
+    }
+}
+
+fn service_environment_contents() -> AppResult<String> {
     let source_environment = runtime_environment()?;
     let mut contents =
-        "# Generated client service settings. Do not add PostgreSQL credentials here.\n".to_owned();
-    contents.push_str(&env_assignment("KEYGEN_CLOUD_API_URL", cloud_url));
-    contents.push_str(&env_assignment("KEYGEN_API_SECRET_TOKEN", api_token.trim()));
+        "# Generated local service settings for PostgreSQL synchronization.\n".to_owned();
     for name in SERVICE_ENV_OPTIONS {
         if let Some(value) = source_environment.value(name) {
             contents.push_str(&env_assignment(name, &value));
@@ -214,8 +194,7 @@ fn service_environment_contents(cloud_url: &str, api_token: &str) -> AppResult<S
     Ok(contents)
 }
 
-fn install_service(cloud_url: &str, api_token: &str) -> AppResult<String> {
-    require_active_cloud_status(cloud_url, api_token)?;
+fn install_service() -> AppResult<String> {
     let source_root = bundle_root()?;
     let source_service = source_root.join("KeyGenService").join("KeyGenService.exe");
     let source_nssm = source_root.join("nssm").join("nssm.exe");
@@ -228,6 +207,7 @@ fn install_service(cloud_url: &str, api_token: &str) -> AppResult<String> {
     if !source_nssm.is_file() {
         return Err(format!("NSSM manquant: {}", source_nssm.display()));
     }
+    verify_install_authorization(&source_service)?;
 
     let destination = install_root()?;
     fs::create_dir_all(&destination)
@@ -242,11 +222,8 @@ fn install_service(cloud_url: &str, api_token: &str) -> AppResult<String> {
         .map_err(|error| format!("Copie de KeyGenService impossible: {error}"))?;
     fs::copy(&source_nssm, &installed_nssm)
         .map_err(|error| format!("Copie de NSSM impossible: {error}"))?;
-    fs::write(
-        destination.join(".env"),
-        service_environment_contents(cloud_url, api_token)?,
-    )
-    .map_err(|error| format!("Ecriture du fichier .env du service impossible: {error}"))?;
+    fs::write(destination.join(".env"), service_environment_contents()?)
+        .map_err(|error| format!("Ecriture du fichier .env du service impossible: {error}"))?;
 
     let service_path = installed_service.to_string_lossy().to_string();
     let app_directory = destination.to_string_lossy().to_string();
@@ -311,7 +288,6 @@ mod gui {
 
     pub fn run() -> AppResult<()> {
         runtime_environment()?;
-        verify_startup_authorization()?;
         unsafe {
             let instance = GetModuleHandleW(null());
             let class_name = wide("ActivateurRmsNativeWindow");
@@ -454,20 +430,12 @@ mod gui {
             return;
         }
 
-        let cloud_url = match validate_cloud_url(&configured_cloud_url()) {
-            Ok(url) => url,
-            Err(error) => {
-                set_text(controls.status, &error);
-                return;
-            }
-        };
-        let token = configured_api_token();
         set_text(
             controls.status,
-            "Installation automatique du service local...",
+            "Connexion requise: verification puis installation du service...",
         );
         UpdateWindow(controls.status);
-        match install_service(&cloud_url, &token) {
+        match install_service() {
             Ok(_) => set_text(
                 controls.status,
                 "Pret. Saisissez l'identifiant puis generez la cle.",
@@ -496,7 +464,7 @@ mod gui {
                 set_text(controls.key, &key);
                 set_text(
                     controls.status,
-                    "Cle generee et mise en file de synchronisation.",
+                    "Cle generee et enregistree; synchronisation automatique active.",
                 );
             }
             Err(error) => set_text(controls.status, &error),
@@ -637,15 +605,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn accepts_supported_cloud_urls() {
-        assert_eq!(
-            validate_cloud_url("https://keys.example.test/"),
-            Ok("https://keys.example.test".to_owned())
-        );
-        assert!(validate_cloud_url("keys.example.test").is_err());
-    }
-
-    #[test]
     fn normalizes_request_codes() {
         assert_eq!(
             validate_request_code("f81a-67a7-c6aa"),
@@ -665,11 +624,5 @@ mod tests {
             Ok("http://127.0.0.1:45639/health".to_owned())
         );
         assert!(local_endpoint_url("not-a-socket", "health").is_err());
-    }
-
-    #[test]
-    fn rejects_disabled_startup_status() {
-        assert!(require_active_cloud_status_value("1").is_ok());
-        assert!(require_active_cloud_status_value("0").is_err());
     }
 }

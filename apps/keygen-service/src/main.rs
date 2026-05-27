@@ -1,7 +1,12 @@
 use chrono::{SecondsFormat, Utc};
 use keygen_common::RuntimeEnvironment;
+use native_tls::TlsConnector;
+use postgres::config::SslMode;
+use postgres::{Client, Config as PostgresConfig, NoTls};
+use postgres_native_tls::MakeTlsConnector;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::env;
 use std::error::Error;
 use std::fs::{self, OpenOptions};
@@ -13,33 +18,112 @@ use std::thread;
 use std::time::Duration;
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
-const DEFAULT_CLOUD_API_URL: &str = "https://activation.example.com";
 const DEFAULT_LISTEN_ADDRESS: &str = "127.0.0.1:45632";
+const BACKEND_MODE: &str = "local-queue-v1";
+const RESTAURANT_SECRET: &str = "RestaurantManagement";
+const LAB_SECRET: &str = "LabInventoryManagement";
+const JEWELRY_SECRET: &str = "JewelryManagement";
 
 type AppResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 #[derive(Clone, Debug)]
+struct DatabaseConfig {
+    host: String,
+    port: u16,
+    database: String,
+    user: String,
+    password: String,
+    ssl_mode: String,
+    connect_timeout: Duration,
+}
+
+impl DatabaseConfig {
+    fn from_environment(environment: &RuntimeEnvironment) -> AppResult<Self> {
+        Ok(Self {
+            host: required_setting(environment, "PGHOST")?,
+            port: required_setting(environment, "PGPORT")?.parse()?,
+            database: required_setting(environment, "PGDATABASE")?,
+            user: required_setting(environment, "PGUSER")?,
+            password: required_setting(environment, "PGPASSWORD")?,
+            ssl_mode: environment
+                .value("PGSSLMODE")
+                .unwrap_or_else(|| "require".to_owned()),
+            connect_timeout: seconds_from_environment(environment, "PGCONNECT_TIMEOUT", 10),
+        })
+    }
+
+    fn connect(&self) -> AppResult<Client> {
+        let mut config = PostgresConfig::new();
+        config
+            .host(&self.host)
+            .port(self.port)
+            .dbname(&self.database)
+            .user(&self.user)
+            .password(&self.password)
+            .connect_timeout(self.connect_timeout);
+
+        match self.ssl_mode.trim().to_ascii_lowercase().as_str() {
+            "disable" => {
+                config.ssl_mode(SslMode::Disable);
+                Ok(config.connect(NoTls)?)
+            }
+            "require" => {
+                config.ssl_mode(SslMode::Require);
+                let mut tls = TlsConnector::builder();
+                // PostgreSQL sslmode=require encrypts transport without validating its certificate.
+                tls.danger_accept_invalid_certs(true);
+                Ok(config.connect(MakeTlsConnector::new(tls.build()?))?)
+            }
+            "verify-full" => {
+                config.ssl_mode(SslMode::Require);
+                Ok(config.connect(MakeTlsConnector::new(TlsConnector::new()?))?)
+            }
+            _ => Err("PGSSLMODE must be disable, require, or verify-full.".into()),
+        }
+    }
+
+    fn read_status(&self) -> AppResult<String> {
+        let mut client = self.connect()?;
+        let row = client.query_opt("SELECT status FROM server_control WHERE id = 1", &[])?;
+        row.map(|record| record.get::<_, String>(0))
+            .ok_or_else(|| "The server_control status row is missing.".into())
+    }
+
+    fn require_active_installation(&self) -> AppResult<()> {
+        match self.read_status()?.trim() {
+            "1" => Ok(()),
+            "0" => Err("Installation refusee: le generateur est desactive.".into()),
+            _ => Err("Installation refusee: etat PostgreSQL invalide.".into()),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 struct Config {
+    database: DatabaseConfig,
     listen_address: String,
-    api_token: String,
     status_interval: Duration,
+    upload_interval: Duration,
 }
 
 impl Config {
-    fn from_environment(environment: &RuntimeEnvironment) -> Self {
-        Self {
+    fn from_environment(environment: &RuntimeEnvironment) -> AppResult<Self> {
+        Ok(Self {
+            database: DatabaseConfig::from_environment(environment)?,
             listen_address: environment
                 .value("KEYGEN_LISTEN_ADDRESS")
                 .unwrap_or_else(|| DEFAULT_LISTEN_ADDRESS.to_owned()),
-            api_token: environment
-                .value("KEYGEN_API_SECRET_TOKEN")
-                .unwrap_or_default(),
             status_interval: seconds_from_environment(
                 environment,
                 "KEYGEN_STATUS_INTERVAL_SECONDS",
-                300,
+                15,
             ),
-        }
+            upload_interval: seconds_from_environment(
+                environment,
+                "KEYGEN_UPLOAD_INTERVAL_SECONDS",
+                5,
+            ),
+        })
     }
 }
 
@@ -47,6 +131,8 @@ impl Config {
 struct StoragePaths {
     primary_log: PathBuf,
     cache_log: PathBuf,
+    pending_uploads: PathBuf,
+    uploaded_log: PathBuf,
     maintenance_file: PathBuf,
 }
 
@@ -57,7 +143,6 @@ impl StoragePaths {
             Some(path) => path.clone(),
             None => default_data_dir(),
         };
-
         fs::create_dir_all(&base_dir)?;
 
         let primary_log = environment
@@ -71,6 +156,8 @@ impl StoragePaths {
         Ok(Self {
             primary_log,
             cache_log: base_dir.join("netcache.dat"),
+            pending_uploads: base_dir.join("pending_uploads.json"),
+            uploaded_log: base_dir.join("uploaded.log"),
             maintenance_file: base_dir.join("MAINTENANCE.txt"),
         })
     }
@@ -81,17 +168,17 @@ fn default_data_dir() -> PathBuf {
     env::var_os("PROGRAMDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
-        .join("SystemLogs")
+        .join("KeyGenRMS")
 }
 
 #[cfg(not(windows))]
 fn default_data_dir() -> PathBuf {
-    env::temp_dir().join("KeyGenService").join("SystemLogs")
+    env::temp_dir().join("KeyGenService").join("KeyGenRMS")
 }
 
 #[cfg(windows)]
 fn default_primary_log() -> PathBuf {
-    PathBuf::from(r"C:\key_storage\generated_keys.txt")
+    default_data_dir().join("generated_keys.txt")
 }
 
 #[cfg(not(windows))]
@@ -101,33 +188,21 @@ fn default_primary_log() -> PathBuf {
 
 struct AppState {
     config: Config,
-    cloud_api_url: String,
     maintenance: AtomicBool,
-    log_lock: Mutex<()>,
+    queue_lock: Mutex<()>,
     paths: StoragePaths,
 }
 
 impl AppState {
     fn from_environment(environment: &RuntimeEnvironment) -> AppResult<Self> {
-        let cloud_api_url = environment
-            .value("KEYGEN_CLOUD_API_URL")
-            .unwrap_or_else(|| DEFAULT_CLOUD_API_URL.to_owned());
-        let cloud_api_url = normalize_cloud_url(&cloud_api_url)
-            .ok_or("KEYGEN_CLOUD_API_URL must begin with http:// or https://")?;
         let paths = StoragePaths::from_environment(environment)?;
         let maintenance = paths.maintenance_file.exists();
-
         Ok(Self {
-            config: Config::from_environment(environment),
-            cloud_api_url,
+            config: Config::from_environment(environment)?,
             maintenance: AtomicBool::new(maintenance),
-            log_lock: Mutex::new(()),
+            queue_lock: Mutex::new(()),
             paths,
         })
-    }
-
-    fn cloud_api_url(&self) -> String {
-        self.cloud_api_url.clone()
     }
 
     fn is_in_maintenance(&self) -> bool {
@@ -135,77 +210,109 @@ impl AppState {
     }
 
     fn apply_remote_status(&self, status: &str) -> AppResult<()> {
-        match status {
+        match status.trim() {
             "0" => {
                 self.maintenance.store(true, Ordering::Relaxed);
                 fs::write(
                     &self.paths.maintenance_file,
                     format!("STATUS=\"0\" - MAINTENANCE MODE at {}\n", now_timestamp()),
                 )?;
-                println!("[MAINTENANCE] Key generation disabled by cloud API.");
+                println!("[MAINTENANCE] Key generation disabled by PostgreSQL status.");
             }
             "1" => {
                 self.maintenance.store(false, Ordering::Relaxed);
                 if self.paths.maintenance_file.exists() {
                     fs::remove_file(&self.paths.maintenance_file)?;
                 }
-                println!("[MAINTENANCE] Key generation enabled by cloud API.");
+                println!("[MAINTENANCE] Key generation enabled by PostgreSQL status.");
             }
-            _ => eprintln!("[REMOTE CHECK] Ignored unknown status: {status}"),
+            _ => return Err("Invalid server_control status in PostgreSQL.".into()),
         }
-
-        Ok(())
-    }
-
-    fn save_generated_key(&self, request_code: &str, activation_key: &str) -> AppResult<()> {
-        if self.is_in_maintenance() {
-            return Err("Maintenance mode: key generation is disabled.".into());
-        }
-
-        let _guard = lock_mutex(&self.log_lock);
-        let line = format!("REQUEST_CODE: {request_code}, ACTIVATION_KEY: {activation_key}\n");
-        append_line(&self.paths.primary_log, &line)?;
-        append_line(&self.paths.cache_log, &line)?;
         Ok(())
     }
 
     fn check_remote_status(&self) -> AppResult<()> {
-        if self.config.api_token.is_empty() {
-            return Err("KEYGEN_API_SECRET_TOKEN is not set; remote control disabled.".into());
-        }
-
-        let url = format!("{}/api/v1/server-status", self.cloud_api_url());
-        let response = ureq::get(&url)
-            .set(
-                "Authorization",
-                &format!("Bearer {}", self.config.api_token),
-            )
-            .set("Content-Type", "application/json")
-            .timeout(Duration::from_secs(12))
-            .call()?;
-        let status: ServerStatus = response.into_json()?;
-        self.apply_remote_status(status.status.trim())
+        self.apply_remote_status(&self.config.database.read_status()?)
     }
 
-    fn request_activation_key(&self, request_code: &str, app_type: &str) -> AppResult<String> {
-        if self.config.api_token.is_empty() {
-            return Err("KEYGEN_API_SECRET_TOKEN is not set; generation disabled.".into());
+    fn save_generated_key(
+        &self,
+        request_code: &str,
+        activation_key: &str,
+        client_ip: &str,
+    ) -> AppResult<()> {
+        if self.is_in_maintenance() {
+            return Err("Maintenance mode: key generation is disabled.".into());
         }
 
-        let url = format!("{}/api/v1/generate-key", self.cloud_api_url());
-        let response = ureq::post(&url)
-            .set(
-                "Authorization",
-                &format!("Bearer {}", self.config.api_token),
-            )
-            .set("Content-Type", "application/json")
-            .timeout(Duration::from_secs(12))
-            .send_json(json!(CloudGenerateRequest {
-                request_code,
-                app_type,
-            }))?;
-        let generated: CloudGenerateResponse = response.into_json()?;
-        Ok(generated.activation_key)
+        let _guard = lock_mutex(&self.queue_lock);
+        let line = format!("REQUEST_CODE: {request_code}, ACTIVATION_KEY: {activation_key}\n");
+        append_line(&self.paths.primary_log, &line)?;
+        append_line(&self.paths.cache_log, &line)?;
+
+        let mut pending = load_pending_uploads(&self.paths.pending_uploads)?;
+        let timestamp = now_timestamp();
+        pending.push(PendingUpload {
+            sync_id: format!("{timestamp}:{request_code}:{activation_key}"),
+            request_code: request_code.to_owned(),
+            activation_key: activation_key.to_owned(),
+            timestamp,
+            ip: client_ip.to_owned(),
+        });
+        save_pending_uploads(&self.paths.pending_uploads, &pending)?;
+        Ok(())
+    }
+
+    fn upload_pending(&self) -> AppResult<()> {
+        let pending = {
+            let _guard = lock_mutex(&self.queue_lock);
+            load_pending_uploads(&self.paths.pending_uploads)?
+        };
+        if pending.is_empty() {
+            return Ok(());
+        }
+
+        let mut client = self.config.database.connect()?;
+        let mut transaction = client.transaction()?;
+        for record in &pending {
+            let sync_id = record.upload_id();
+            transaction.execute(
+                r#"
+                INSERT INTO activation_logs
+                    (sync_id, request_code, activation_key, generated_at, device_ip)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (sync_id) DO NOTHING
+                "#,
+                &[
+                    &sync_id,
+                    &record.request_code,
+                    &record.activation_key,
+                    &record.timestamp,
+                    &record.ip,
+                ],
+            )?;
+        }
+        transaction.commit()?;
+
+        let _guard = lock_mutex(&self.queue_lock);
+        let queued = load_pending_uploads(&self.paths.pending_uploads)?;
+        if queued.len() < pending.len() || queued[..pending.len()] != pending {
+            return Err("Pending upload queue changed unexpectedly.".into());
+        }
+        for record in &pending {
+            append_line(
+                &self.paths.uploaded_log,
+                &format!(
+                    "{} | {} | {}\n",
+                    now_timestamp(),
+                    record.request_code,
+                    record.activation_key
+                ),
+            )?;
+        }
+        save_pending_uploads(&self.paths.pending_uploads, &queued[pending.len()..])?;
+        println!("[POSTGRESQL] Uploaded {} queued records.", pending.len());
+        Ok(())
     }
 }
 
@@ -215,32 +322,40 @@ struct GenerateRequest {
     app_type: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ServerStatus {
-    status: String,
-}
-
-#[derive(Serialize)]
-struct CloudGenerateRequest<'a> {
-    request_code: &'a str,
-    app_type: &'a str,
-}
-
-#[derive(Deserialize)]
-struct CloudGenerateResponse {
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+struct PendingUpload {
+    #[serde(default)]
+    sync_id: String,
+    request_code: String,
     activation_key: String,
+    timestamp: String,
+    ip: String,
+}
+
+impl PendingUpload {
+    fn upload_id(&self) -> String {
+        if self.sync_id.is_empty() {
+            format!(
+                "legacy:{}:{}:{}",
+                self.timestamp, self.request_code, self.activation_key
+            )
+        } else {
+            self.sync_id.clone()
+        }
+    }
 }
 
 fn main() -> AppResult<()> {
     let environment = RuntimeEnvironment::load()?;
-    let state = Arc::new(AppState::from_environment(&environment)?);
-
-    if state.config.api_token.is_empty() {
-        eprintln!("[CONFIG] KEYGEN_API_SECRET_TOKEN is unset; remote generation is disabled.");
+    if env::args().any(|argument| argument == "--authorize-install") {
+        DatabaseConfig::from_environment(&environment)?.require_active_installation()?;
+        println!("Installation authorized by PostgreSQL status.");
+        return Ok(());
     }
 
-    state.check_remote_status()?;
+    let state = Arc::new(AppState::from_environment(&environment)?);
     spawn_remote_controller(Arc::clone(&state));
+    spawn_uploader(Arc::clone(&state));
 
     let server = Server::http(&state.config.listen_address)?;
     println!("--- KeyGenService Rust backend ---");
@@ -248,14 +363,13 @@ fn main() -> AppResult<()> {
         "Local API: http://{}/generate_key",
         state.config.listen_address
     );
-    println!("Cloud API: {}", state.cloud_api_url());
+    println!("Pending queue: {}", state.paths.pending_uploads.display());
     if environment.exists() {
         println!("Config: {}", environment.path().display());
     }
     for request in server.incoming_requests() {
         handle_request(request, &state);
     }
-
     Ok(())
 }
 
@@ -263,9 +377,20 @@ fn spawn_remote_controller(state: Arc<AppState>) {
     thread::spawn(move || {
         loop {
             if let Err(error) = state.check_remote_status() {
-                eprintln!("[REMOTE CHECK] {error}");
+                eprintln!("[STATUS] {error}");
             }
             thread::sleep(state.config.status_interval);
+        }
+    });
+}
+
+fn spawn_uploader(state: Arc<AppState>) {
+    thread::spawn(move || {
+        loop {
+            if let Err(error) = state.upload_pending() {
+                eprintln!("[UPLOAD] {error}");
+            }
+            thread::sleep(state.config.upload_interval);
         }
     });
 }
@@ -281,8 +406,11 @@ fn handle_request(mut request: Request, state: &Arc<AppState>) {
             200,
             &json!({
                 "status": "ok",
+                "backend_mode": BACKEND_MODE,
                 "maintenance": state.is_in_maintenance(),
-                "cloud_api_url": state.cloud_api_url()
+                "pending_uploads": load_pending_uploads(&state.paths.pending_uploads)
+                    .map(|records| records.len())
+                    .unwrap_or_default()
             }),
         ),
         _ => respond_json(request, 404, &json!({"error": "Not found"})),
@@ -290,18 +418,11 @@ fn handle_request(mut request: Request, state: &Arc<AppState>) {
 }
 
 fn generate_key_response(request: &mut Request, state: &Arc<AppState>) -> (u16, Value) {
-    if let Err(error) = state.check_remote_status() {
-        eprintln!("[AUTHORIZATION] {error}");
-        return (
-            503,
-            json!({"error": "Remote authorization unavailable; key generation denied."}),
-        );
-    }
     if state.is_in_maintenance() {
         return (
             503,
             json!({
-                "error": "Server is under maintenance. Key generation is temporarily disabled.",
+                "error": "Server is under maintenance. Key generation is disabled.",
                 "status": "maintenance_mode"
             }),
         );
@@ -315,7 +436,6 @@ fn generate_key_response(request: &mut Request, state: &Arc<AppState>) -> (u16, 
         Ok(payload) => payload,
         Err(_) => return (400, json!({"error": "Invalid JSON body"})),
     };
-
     let Some(raw_code) = payload.request_code else {
         return (400, json!({"error": "Missing 'request_code' in JSON body"}));
     };
@@ -326,20 +446,16 @@ fn generate_key_response(request: &mut Request, state: &Arc<AppState>) -> (u16, 
             json!({"error": "Invalid request_code format. Expected 'XXXX-XXXX-XXXX'."}),
         );
     }
-
     let app_type = payload.app_type.as_deref().unwrap_or("Restaurant");
-    let activation_key = match state.request_activation_key(&request_code, app_type) {
-        Ok(key) => key,
-        Err(error) => {
-            eprintln!("[GENERATE CLOUD] {error}");
-            return (
-                503,
-                json!({"error": "Cloud generation denied or unavailable."}),
-            );
-        }
+    let Some(activation_key) = generate_activation_key(&request_code, app_type) else {
+        return (400, json!({"error": "Invalid app_type."}));
     };
+    let client_ip = request
+        .remote_addr()
+        .map(|address| address.ip().to_string())
+        .unwrap_or_else(|| "unknown".to_owned());
 
-    if let Err(error) = state.save_generated_key(&request_code, &activation_key) {
+    if let Err(error) = state.save_generated_key(&request_code, &activation_key, &client_ip) {
         eprintln!("[GENERATE] {error}");
         return (503, json!({"error": "Key generation failed."}));
     }
@@ -350,7 +466,7 @@ fn generate_key_response(request: &mut Request, state: &Arc<AppState>) -> (u16, 
             "request_code": request_code,
             "activation_key": activation_key,
             "app_type": app_type,
-            "status": "generated_by_cloud"
+            "status": "generated_and_queued"
         }),
     )
 }
@@ -366,21 +482,56 @@ fn respond_json(request: Request, status_code: u16, body: &Value) {
     }
 }
 
+fn generate_activation_key(request_code: &str, app_type: &str) -> Option<String> {
+    let secret = match app_type {
+        "Restaurant" => RESTAURANT_SECRET,
+        "Lab" => LAB_SECRET,
+        "Jewelry" => JEWELRY_SECRET,
+        _ => return None,
+    };
+    let digest = Sha256::digest(format!("{request_code}::{secret}").as_bytes());
+    let encoded = digest
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<String>();
+    let key = &encoded[..16];
+    Some(
+        (0..16)
+            .step_by(4)
+            .map(|start| &key[start..start + 4])
+            .collect::<Vec<_>>()
+            .join("-"),
+    )
+}
+
 fn valid_request_code(request_code: &str) -> bool {
     request_code.len() == 14
         && request_code.as_bytes()[4] == b'-'
         && request_code.as_bytes()[9] == b'-'
 }
 
-fn normalize_cloud_url(url: &str) -> Option<String> {
-    let trimmed = url.trim().trim_end_matches('/');
-    if (trimmed.starts_with("http://") || trimmed.starts_with("https://"))
-        && !trimmed.chars().any(char::is_whitespace)
-    {
-        Some(trimmed.to_owned())
-    } else {
-        None
+fn required_setting(environment: &RuntimeEnvironment, name: &str) -> AppResult<String> {
+    environment
+        .value(name)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("{name} is required for PostgreSQL synchronization.").into())
+}
+
+fn load_pending_uploads(path: &Path) -> AppResult<Vec<PendingUpload>> {
+    if !path.exists() {
+        return Ok(Vec::new());
     }
+    let contents = fs::read_to_string(path)?;
+    if contents.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(serde_json::from_str(&contents)?)
+}
+
+fn save_pending_uploads(path: &Path, records: &[PendingUpload]) -> AppResult<()> {
+    ensure_parent_dir(path)?;
+    fs::write(path, serde_json::to_vec_pretty(records)?)?;
+    Ok(())
 }
 
 fn append_line(path: &Path, line: &str) -> AppResult<()> {
@@ -406,11 +557,12 @@ fn seconds_from_environment(
     variable: &str,
     default: u64,
 ) -> Duration {
-    let seconds = environment
-        .value(variable)
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default);
-    Duration::from_secs(seconds)
+    Duration::from_secs(
+        environment
+            .value(variable)
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(default),
+    )
 }
 
 fn lock_mutex<T>(lock: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -422,17 +574,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn validates_request_format_compatible_with_python_service() {
-        assert!(valid_request_code("F81A-67A7-C6AA"));
-        assert!(!valid_request_code("F81A67A7C6AA"));
+    fn generates_expected_keys_locally_for_supported_products() {
+        assert_eq!(
+            generate_activation_key("F81A-67A7-C6AA", "Restaurant"),
+            Some("EE8C-551F-0A90-73F5".to_owned())
+        );
+        assert_eq!(
+            generate_activation_key("F81A-67A7-C6AA", "Lab"),
+            Some("F74D-9047-9117-B8AF".to_owned())
+        );
+        assert_eq!(
+            generate_activation_key("F81A-67A7-C6AA", "Jewelry"),
+            Some("EF4E-047E-2AF5-63B7".to_owned())
+        );
+        assert!(generate_activation_key("F81A-67A7-C6AA", "Unknown").is_none());
     }
 
     #[test]
-    fn validates_cloud_url_scheme() {
-        assert_eq!(
-            normalize_cloud_url("https://example.test/api/"),
-            Some("https://example.test/api".to_owned())
-        );
-        assert_eq!(normalize_cloud_url("file:///tmp/api"), None);
+    fn validates_request_format() {
+        assert!(valid_request_code("F81A-67A7-C6AA"));
+        assert!(!valid_request_code("F81A67A7C6AA"));
     }
 }

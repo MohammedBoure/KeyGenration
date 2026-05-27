@@ -1,13 +1,12 @@
 import argparse
 
-from keygen_api import create_app
-from keygen_api.config import debug_enabled, load_environment
+from keygen_api.config import load_environment
 from keygen_api.db import init_db
 from keygen_api.migrations import migrate_from_sqlite
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Activateur RMS cloud API")
+    parser = argparse.ArgumentParser(description="Activateur RMS PostgreSQL setup utility")
     parser.add_argument(
         "--migrate-sqlite",
         metavar="PATH",
@@ -16,7 +15,7 @@ def parse_args():
     parser.add_argument(
         "--init-db-only",
         action="store_true",
-        help="Initialize PostgreSQL tables without starting the HTTP API.",
+        help="Initialize PostgreSQL tables and exit.",
     )
     return parser.parse_args()
 
@@ -30,11 +29,9 @@ def main():
         count = migrate_from_sqlite(args.migrate_sqlite)
         print(f"Imported or retained {count} SQLite activation log records.")
         return
-    if args.init_db_only:
-        print("PostgreSQL tables are initialized.")
-        return
-
-    create_app().run(host="0.0.0.0", port=7002, debug=debug_enabled())
+    print("PostgreSQL tables are initialized.")
+    if not args.init_db_only:
+        print("Run python .\\fastapi_app.py to open the local administration dashboard.")
 
 
 if __name__ == "__main__":

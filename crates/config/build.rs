@@ -3,13 +3,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const BUILD_ENV_VARIABLE: &str = "KEYGEN_BUILD_ENV_FILE";
-const CLIENT_SETTINGS: [&str; 6] = [
-    "KEYGEN_CLOUD_API_URL",
-    "KEYGEN_API_SECRET_TOKEN",
+const CLIENT_SETTINGS: [&str; 10] = [
+    "PGHOST",
+    "PGPORT",
+    "PGDATABASE",
+    "PGSSLMODE",
+    "PGCONNECT_TIMEOUT",
     "KEYGEN_LISTEN_ADDRESS",
     "KEYGEN_DATA_DIR",
     "KEYGEN_PRIMARY_LOG",
     "KEYGEN_STATUS_INTERVAL_SECONDS",
+    "KEYGEN_UPLOAD_INTERVAL_SECONDS",
 ];
 
 fn main() {

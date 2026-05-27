@@ -1,17 +1,13 @@
 # Windows Package
 
-This directory contains Windows distribution inputs only. Application source
-lives under `apps/`; generated binaries are written to ignored `dist/`.
+This directory creates the Windows UI and permanent NSSM service bundle.
 
 ```powershell
 Copy-Item .\packaging\windows\client.env.example .\packaging\windows\.env
-# Edit .\packaging\windows\.env with deployed client API settings.
 .\packaging\windows\package.cmd
 ```
 
-The command starts the PowerShell packager with a script execution policy
-suitable for the local packaging invocation, embeds only the permitted values
-from `.env` in both Rust executables, and creates:
+Output:
 
 ```text
 dist\windows\ActivateurRMS\
@@ -21,14 +17,14 @@ dist\windows\ActivateurRMS\
 `-- nssm\nssm.exe
 ```
 
-`packaging/windows/.env` is a build input and is not copied into the package.
-Never place PostgreSQL credentials in it or in the client package. Packaging
-fails when `.env` is missing so a production package cannot silently use the
-placeholder URL.
+Packaging embeds only non-secret defaults; it does not embed `PGUSER` or
+`PGPASSWORD`. To operate the packaged tool on the managed computer, place a
+configured `.env` beside `ActivateurRMS.exe`. During authorized installation
+the UI writes that configuration to the local NSSM service directory.
 
-For a non-production packaging check only, the template can be selected
-explicitly:
+The local configuration should use an account restricted to:
 
-```powershell
-.\packaging\windows\package.cmd -ClientEnvironmentFile .\packaging\windows\client.env.example
-```
+- `SELECT` on `server_control`.
+- `INSERT` on `activation_logs`.
+
+Do not distribute or expose the local `.env` containing a database password.

@@ -67,11 +67,20 @@ def init_db():
             """
             CREATE TABLE IF NOT EXISTS activation_logs (
                 id BIGSERIAL PRIMARY KEY,
+                sync_id TEXT UNIQUE,
                 request_code TEXT,
                 activation_key TEXT,
                 generated_at TEXT,
                 device_ip TEXT
             )
+            """
+        )
+        cursor.execute("ALTER TABLE activation_logs ADD COLUMN IF NOT EXISTS sync_id TEXT")
+        cursor.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS activation_logs_sync_id_idx
+            ON activation_logs (sync_id)
+            WHERE sync_id IS NOT NULL
             """
         )
         cursor.execute(

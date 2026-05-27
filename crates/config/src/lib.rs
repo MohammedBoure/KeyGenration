@@ -152,21 +152,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_client_settings_and_tokens_with_equals() {
+    fn parses_postgresql_settings_and_passwords_with_equals() {
         let values = parse_dotenv(
             "# package settings\n\
-             KEYGEN_CLOUD_API_URL=https://keys.example.test\n\
-             KEYGEN_API_SECRET_TOKEN=\"abc_def==\"\n\
+             PGHOST=database.example.test\n\
+             PGPASSWORD=\"abc_def==\"\n\
              export KEYGEN_LISTEN_ADDRESS='127.0.0.1:45632'\n",
         )
         .unwrap();
 
         assert_eq!(
-            values.get("KEYGEN_CLOUD_API_URL").map(String::as_str),
-            Some("https://keys.example.test")
+            values.get("PGHOST").map(String::as_str),
+            Some("database.example.test")
         );
         assert_eq!(
-            values.get("KEYGEN_API_SECRET_TOKEN").map(String::as_str),
+            values.get("PGPASSWORD").map(String::as_str),
             Some("abc_def==")
         );
         assert_eq!(
@@ -177,10 +177,10 @@ mod tests {
 
     #[test]
     fn generated_assignments_round_trip_special_values() {
-        let contents = env_assignment("KEYGEN_API_SECRET_TOKEN", "a=\"b\"\\c");
+        let contents = env_assignment("PGPASSWORD", "a=\"b\"\\c");
         let values = parse_dotenv(&contents).unwrap();
         assert_eq!(
-            values.get("KEYGEN_API_SECRET_TOKEN").map(String::as_str),
+            values.get("PGPASSWORD").map(String::as_str),
             Some("a=\"b\"\\c")
         );
     }

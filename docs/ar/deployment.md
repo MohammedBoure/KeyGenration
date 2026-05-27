@@ -1,120 +1,77 @@
-# البناء والنشر
+# البناء والتشغيل
 
-## البنية
+لا توجد خدمة Cloud API عامة في هذا التصميم. خدمة Rust المثبتة تتصل مباشرة
+بـ PostgreSQL، ولوحة FastAPI مخصصة للتشغيل المحلي على جهاز الإدارة.
 
-```text
-apps/desktop/            مصدر واجهة ActivateurRMS.exe
-apps/keygen-service/     مصدر خدمة KeyGenService.exe
-crates/config/           قارئ .env والأنواع المشتركة
-services/cloud-api/      API السحابي ولوحة التحكم
-packaging/windows/       تغليف عميل Windows وNSSM
-dist/                    ناتج البناء المحلي غير المتتبع
-```
+## إعداد PostgreSQL ولوحة الإدارة المحلية
 
-## بناء عميل Rust
-
-جهز أولا إعداد العميل الذي سيضمّن في ملفي Rust التنفيذيين:
+من مجلد `services\cloud-api`، وهو اسم تاريخي للمجلد:
 
 ```powershell
-Copy-Item .\packaging\windows\client.env.example .\packaging\windows\.env
-# حرر packaging\windows\.env وضع عنوان Cloud API المنشور وتوكن العميل المحدود.
-```
-
-لا تستخدم ملف `services/cloud-api/.env` لهذه الخطوة، ولا تضع بيانات
-PostgreSQL في إعداد العميل. ثم من جذر المستودع:
-
-```powershell
-cargo fmt --all
-cargo test
-cargo clippy --all-targets -- -D warnings
-.\packaging\windows\package.cmd
-```
-
-يشغل ملف `package.cmd` سكربت PowerShell بسياسة تنفيذ مناسبة للتغليف المحلي،
-ثم ينفذ `cargo build --release --workspace` وينسخ ملفات التشغيل إلى
-`dist\windows\ActivateurRMS\`، ثم ينشئ `SHA256SUMS.txt`. لا تتضمن الحزمة
-ملف `.env`؛ تقرأ الواجهة والخدمة المحلية الإعدادات المصفاة المضمّنة.
-
-## تشغيل Cloud API
-
-```powershell
-cd .\services\cloud-api
-python -m pip install -r .\requirements.txt
 Copy-Item .\.env.example .\.env
-# حرر .env وضع كلمة مرور PostgreSQL وتوكن العميل المحدود وتوكن الإدارة.
-python .\app.py
-```
-
-ملف `.env` الخاص بالخادم:
-
-```dotenv
-PGHOST=sw4.duckdns.org
-PGPORT=9005
-PGDATABASE=keygen_restaurant
-PGUSER=keygen_app
-PGPASSWORD=replace-with-database-password
-PGSSLMODE=require
-PGCONNECT_TIMEOUT=10
-KEYGEN_API_SECRET_TOKEN=replace-with-limited-client-token
-KEYGEN_ADMIN_SECRET_TOKEN=replace-with-distinct-admin-token
-FLASK_DEBUG=0
-```
-
-يستمع التشغيل المباشر على `http://0.0.0.0:7002`. في الإنتاج ضع الخدمة خلف
-HTTPS واستخدم عنوان HTTPS في حزمة العميل.
-
-بعد تشغيل تهيئة الجداول، يمكن لخادم WSGI استيراد التطبيق من `wsgi.py`
-باسم `application`.
-
-## تهيئة قاعدة البيانات
-
-ينشئ `python .\app.py` تلقائيا جدول التحكم وجدول سجلات التفعيل. لتهيئة
-الجداول دون تشغيل HTTP:
-
-```powershell
+# ضع بيانات PostgreSQL الفعلية في .env
 python .\app.py --init-db-only
-```
-
-## استيراد SQLite
-
-```powershell
-python .\app.py --migrate-sqlite .\cloud_database.db
-```
-
-الاستيراد لا يكرر سجلات التفعيل التي تحمل معرفا موجودا.
-
-## لوحة التحكم
-
-بعد نشر API افتح:
-
-```text
-https://your-api-host/dashboard
-```
-
-أدخل `KEYGEN_ADMIN_SECRET_TOKEN` لقراءة السجلات أو تغيير وضع التوليد.
-لا تضع هذا التوكن في حزمة برنامج البائع.
-
-للمراقبة المباشرة من جهاز الإدارة دون نشر Cloud API، شغل لوحة FastAPI
-المحلية التي تتصل بنفس قاعدة PostgreSQL:
-
-```powershell
-cd .\services\cloud-api
 python .\fastapi_app.py
 ```
 
-ثم افتح `http://127.0.0.1:8080/`. راجع
-[دليل لوحة المراقبة المحلية](local-dashboard.md) لإعداد `.env` ومسارات
-الخدمة واحتياطات الأمان.
+ثم افتح:
 
-## قائمة تحقق للنشر
+```text
+http://127.0.0.1:8080/
+```
 
-1. جهز `.env` للخادم داخل `services/cloud-api/` فقط.
-2. اختبر اتصال PostgreSQL باستخدام `--init-db-only`.
-3. انشر API خلف HTTPS.
-4. أنشئ توكن إدارة منفصلا عن توكن العميل في إعداد الخادم.
-5. أنشئ `packaging/windows/.env` من قالب العميل وضع عنوان API المنشور وتوكن
-   العميل المحدود فقط.
-6. نفذ `packaging/windows/package.cmd` لتضمين إعداد العميل المصفى.
-7. شغل الواجهة؛ ستطلب صلاحية Administrator تلقائيا عند الحاجة لتجهيز الخدمة.
-8. ولد مفتاحا لكل نوع برنامج وتحقق من ظهوره في لوحة التحكم.
-9. غير الحالة إلى `0` وتحقق من رفض تشغيل المولد أو إصدار مفتاح جديد.
+تقرأ اللوحة سجلات `activation_logs` وتغير قيمة `server_control.status`
+بين `1` و`0`.
+
+## حساب البرنامج الموزع
+
+تقرأ خدمة Rust بيانات الاتصال من ملف `.env` المحلي في جهاز التشغيل؛ ولا
+يضمّن البناء اسم المستخدم أو كلمة المرور في `exe`. مع ذلك لا تستخدم الحساب
+الإداري أو حساب مالك القاعدة على جهاز غير موثوق. الحساب المحدود يحتاج فقط:
+
+```sql
+GRANT CONNECT ON DATABASE keygen_restaurant TO restricted_client_user;
+GRANT USAGE ON SCHEMA public TO restricted_client_user;
+GRANT SELECT ON TABLE server_control TO restricted_client_user;
+GRANT INSERT ON TABLE activation_logs TO restricted_client_user;
+GRANT USAGE, SELECT ON SEQUENCE activation_logs_id_seq TO restricted_client_user;
+```
+
+يجب ألا يمتلك هذا الحساب صلاحية `UPDATE` على `server_control`.
+
+## بناء حزمة Windows
+
+من جذر المشروع:
+
+```powershell
+Copy-Item .\packaging\windows\client.env.example .\packaging\windows\.env
+cargo fmt --all
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+.\packaging\windows\package.cmd
+```
+
+الناتج:
+
+```text
+dist\windows\ActivateurRMS\
+|-- ActivateurRMS.exe
+|-- SHA256SUMS.txt
+|-- KeyGenService\KeyGenService.exe
+`-- nssm\nssm.exe
+```
+
+لا تضمّن الحزمة `PGUSER` أو `PGPASSWORD`. على جهاز التشغيل الذي تديره، انسخ
+القالب كملف `.env` بجانب `ActivateurRMS.exe` وضع بيانات PostgreSQL فيه. بعد
+التثبيت تحفظ الخدمة إعدادها المحلي داخل `%ProgramFiles%\KeyGenRMS\.env`.
+
+## اختبار دورة التشغيل
+
+1. اجعل الحالة `1` من لوحة الإدارة.
+2. شغل الواجهة على جهاز اختبار واتركها تثبت خدمة NSSM.
+3. أنشئ مفتاحا وتحقق من ظهوره في اللوحة بعد المزامنة.
+4. افصل الاتصال وأنشئ مفتاحا؛ تحقق من وجوده في `pending_uploads.json`.
+5. أعد الاتصال وتحقق من رفع السجل.
+6. غيّر الحالة إلى `0` أثناء اتصال الجهاز؛ بعد وصولها للخدمة يجب أن ترفض
+   المفاتيح الجديدة.
+7. أعد الحالة إلى `1` وتحقق من عودة التوليد.

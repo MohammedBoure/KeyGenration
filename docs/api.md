@@ -1,39 +1,30 @@
-# Cloud And Local API Reference
+# Interfaces And Storage Reference
 
-## Cloud API Authentication
+The Windows client no longer uses an HTTP Cloud API. `KeyGenService.exe`
+connects directly to PostgreSQL for status reads and deferred log uploads.
+The only web application is the local FastAPI dashboard.
 
-The distributed Rust client contains only the limited client token:
+## Local Rust Service
 
-```http
-Authorization: Bearer <KEYGEN_API_SECRET_TOKEN>
-Content-Type: application/json
-```
+Default address: `http://127.0.0.1:45632`.
 
-It may call `GET /api/v1/server-status` and `POST /api/v1/generate-key`.
-Administration routes require the separate token that must never be included
-in a client build:
-
-```http
-Authorization: Bearer <KEYGEN_ADMIN_SECRET_TOKEN>
-```
-
-## Cloud Routes
-
-### `GET /api/v1/server-status`
-
-Returns the generation state:
+### `GET /health`
 
 ```json
-{"status": "1"}
+{
+  "status": "ok",
+  "backend_mode": "local-queue-v1",
+  "maintenance": false,
+  "pending_uploads": 0
+}
 ```
 
-`1` is active and `0` is maintenance.
+The desktop UI requires `backend_mode` to match; otherwise it upgrades the
+installed service after an authorized online check.
 
-### `POST /api/v1/generate-key`
+### `POST /generate_key`
 
-The key algorithm exists only in Cloud API. Generation succeeds only while
-`server_control.status` is `1`, and the record is inserted in PostgreSQL in
-the same request.
+Request:
 
 ```json
 {"request_code":"F81A-67A7-C6AA","app_type":"Restaurant"}
@@ -42,68 +33,62 @@ the same request.
 Success:
 
 ```json
-{"request_code":"F81A-67A7-C6AA","activation_key":"EE8C-551F-0A90-73F5","app_type":"Restaurant","status":"generated_and_recorded"}
-```
-
-When disabled it returns HTTP `503` without generating a key.
-
-### `POST /api/v1/set-status` (admin only)
-
-```json
-{"status": "0"}
-```
-
-### `GET /api/v1/activation-logs` (admin only)
-
-Returns activation records from PostgreSQL in descending identifier order.
-
-## Local Rust Service
-
-The default local address is `http://127.0.0.1:45632`; it can be changed via
-`KEYGEN_LISTEN_ADDRESS`.
-
-### `GET /health`
-
-```json
-{"status":"ok","maintenance":false,"cloud_api_url":"https://activation.example.com"}
-```
-
-### `POST /generate_key`
-
-```json
 {
-  "request_code": "F81A-67A7-C6AA",
-  "app_type": "Restaurant"
+  "request_code":"F81A-67A7-C6AA",
+  "activation_key":"EE8C-551F-0A90-73F5",
+  "app_type":"Restaurant",
+  "status":"generated_and_queued"
 }
 ```
 
-Success:
+Before generating, the service attempts to refresh status from PostgreSQL. If
+that connection fails it follows its last locally saved state, allowing offline
+generation when it was last active.
 
-```json
-{
-  "request_code": "F81A-67A7-C6AA",
-  "activation_key": "EE8C-551F-0A90-73F5",
-  "app_type": "Restaurant",
-  "status": "generated_by_cloud"
-}
+## PostgreSQL Contract
+
+### `server_control`
+
+```sql
+SELECT status FROM server_control WHERE id = 1;
 ```
 
-The local backend is a proxy and does not contain the key algorithm. It asks
-Cloud API for every key. During maintenance or when remote authorization
-cannot be verified, it returns HTTP `503` and does not generate a key.
+- `1`: permits installation and clears local maintenance when received.
+- `0`: refuses a new installation and stops generation once a running service
+  receives it.
 
-## Local FastAPI Monitoring Dashboard
+### `activation_logs`
 
-Run `python .\fastapi_app.py` from `services/cloud-api` to use a local-only
-dashboard backed directly by the configured PostgreSQL database.
+The local service queues generated records on disk, then inserts them in a
+transaction when PostgreSQL becomes reachable:
+
+```sql
+INSERT INTO activation_logs
+    (sync_id, request_code, activation_key, generated_at, device_ip)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (sync_id) DO NOTHING;
+```
+
+`sync_id` makes retrying an interrupted upload idempotent.
+
+The local runtime `.env` database account should only have `SELECT` permission
+on `server_control` and `INSERT` permission on `activation_logs`. The packaged
+executables do not embed `PGUSER` or `PGPASSWORD`.
+
+## Local FastAPI Dashboard
+
+Run from `services/cloud-api`:
+
+```powershell
+python .\fastapi_app.py
+```
+
+By default it listens on `http://127.0.0.1:8080/`.
 
 | Route | Purpose |
 | --- | --- |
-| `GET /` | Browser dashboard |
-| `GET /health` | Web service health response |
-| `GET /api/status` | Reads `server_control.status` |
-| `PUT /api/status` | Accepts `{"status":"0"}` or `{"status":"1"}` |
-| `GET /api/activation-logs?limit=100` | Reads the latest activation records |
-
-By default it accepts browser requests only from the local computer. It is
-separate from the bearer-token protected Cloud API used by the Rust service.
+| `GET /` | Local browser dashboard |
+| `GET /health` | Web service health |
+| `GET /api/status` | Read `server_control.status` |
+| `PUT /api/status` | Write `{"status":"0"}` or `{"status":"1"}` |
+| `GET /api/activation-logs?limit=100` | Display recently uploaded records |
