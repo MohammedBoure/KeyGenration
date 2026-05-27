@@ -133,6 +133,7 @@ struct StoragePaths {
     cache_log: PathBuf,
     pending_uploads: PathBuf,
     uploaded_log: PathBuf,
+    authorization_file: PathBuf,
     maintenance_file: PathBuf,
 }
 
@@ -158,6 +159,7 @@ impl StoragePaths {
             cache_log: base_dir.join("netcache.dat"),
             pending_uploads: base_dir.join("pending_uploads.json"),
             uploaded_log: base_dir.join("uploaded.log"),
+            authorization_file: base_dir.join("AUTHORIZED.txt"),
             maintenance_file: base_dir.join("MAINTENANCE.txt"),
         })
     }
@@ -207,6 +209,19 @@ impl AppState {
 
     fn is_in_maintenance(&self) -> bool {
         self.maintenance.load(Ordering::Relaxed) || self.paths.maintenance_file.exists()
+    }
+
+    fn establish_initial_authorization(&self) -> AppResult<()> {
+        if self.paths.authorization_file.exists() {
+            return Ok(());
+        }
+        self.config.database.require_active_installation()?;
+        self.apply_remote_status("1")?;
+        fs::write(
+            &self.paths.authorization_file,
+            format!("STATUS=\"1\" - AUTHORIZED at {}\n", now_timestamp()),
+        )?;
+        Ok(())
     }
 
     fn apply_remote_status(&self, status: &str) -> AppResult<()> {
@@ -354,6 +369,7 @@ fn main() -> AppResult<()> {
     }
 
     let state = Arc::new(AppState::from_environment(&environment)?);
+    state.establish_initial_authorization()?;
     spawn_remote_controller(Arc::clone(&state));
     spawn_uploader(Arc::clone(&state));
 
@@ -407,6 +423,7 @@ fn handle_request(mut request: Request, state: &Arc<AppState>) {
             &json!({
                 "status": "ok",
                 "backend_mode": BACKEND_MODE,
+                "authorized": state.paths.authorization_file.exists(),
                 "maintenance": state.is_in_maintenance(),
                 "pending_uploads": load_pending_uploads(&state.paths.pending_uploads)
                     .map(|records| records.len())

@@ -161,6 +161,16 @@ fn run_optional(program: &Path, arguments: &[&str]) {
     let _ = Command::new(program).args(arguments).output();
 }
 
+fn bundled_service_path() -> AppResult<PathBuf> {
+    let service = bundle_root()?
+        .join("KeyGenService")
+        .join("KeyGenService.exe");
+    if !service.is_file() {
+        return Err(format!("Backend Rust manquant: {}", service.display()));
+    }
+    Ok(service)
+}
+
 fn verify_install_authorization(service: &Path) -> AppResult<()> {
     let environment = runtime_environment()?;
     let mut command = Command::new(service);
@@ -196,14 +206,8 @@ fn service_environment_contents() -> AppResult<String> {
 
 fn install_service() -> AppResult<String> {
     let source_root = bundle_root()?;
-    let source_service = source_root.join("KeyGenService").join("KeyGenService.exe");
+    let source_service = bundled_service_path()?;
     let source_nssm = source_root.join("nssm").join("nssm.exe");
-    if !source_service.is_file() {
-        return Err(format!(
-            "Backend Rust manquant: {}",
-            source_service.display()
-        ));
-    }
     if !source_nssm.is_file() {
         return Err(format!("NSSM manquant: {}", source_nssm.display()));
     }
@@ -418,6 +422,25 @@ mod gui {
             return;
         }
 
+        set_text(
+            controls.status,
+            "Connexion requise: verification PostgreSQL avant installation...",
+        );
+        UpdateWindow(controls.status);
+        let source_service = match bundled_service_path() {
+            Ok(path) => path,
+            Err(error) => {
+                set_text(controls.status, &error);
+                message_box(window, "Installation impossible", &error);
+                return;
+            }
+        };
+        if let Err(error) = verify_install_authorization(&source_service) {
+            set_text(controls.status, &error);
+            message_box(window, "Installation impossible", &error);
+            return;
+        }
+
         if IsUserAnAdmin() == 0 {
             set_text(
                 controls.status,
@@ -432,7 +455,7 @@ mod gui {
 
         set_text(
             controls.status,
-            "Connexion requise: verification puis installation du service...",
+            "Installation automatique du service local...",
         );
         UpdateWindow(controls.status);
         match install_service() {

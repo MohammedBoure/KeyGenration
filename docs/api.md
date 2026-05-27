@@ -14,13 +14,16 @@ Default address: `http://127.0.0.1:45632`.
 {
   "status": "ok",
   "backend_mode": "local-queue-v1",
+  "authorized": true,
   "maintenance": false,
   "pending_uploads": 0
 }
 ```
 
 The desktop UI requires `backend_mode` to match; otherwise it upgrades the
-installed service after an authorized online check.
+installed service after an authorized online check. A fresh service does not
+listen until PostgreSQL returns status `1` and its local authorization marker
+has been created.
 
 ### `POST /generate_key`
 
@@ -41,9 +44,9 @@ Success:
 }
 ```
 
-Before generating, the service attempts to refresh status from PostgreSQL. If
-that connection fails it follows its last locally saved state, allowing offline
-generation when it was last active.
+The service refreshes status from PostgreSQL in the background. Requests use
+the last locally saved state, allowing offline generation after a successful
+initial authorization when it was last active.
 
 ## PostgreSQL Contract
 

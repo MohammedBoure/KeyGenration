@@ -6,7 +6,9 @@ Permanent local backend installed with NSSM by the desktop application.
 
 - `--authorize-install` connects directly to PostgreSQL and succeeds only when
   `server_control.status` is `1`.
-- On normal startup, restores the last maintenance state saved on disk and
+- A fresh normal startup also requires status `1`, then writes
+  `AUTHORIZED.txt`; only an already authorized installation can start offline.
+- On later startup, restores the last maintenance state saved on disk and
   refreshes it from PostgreSQL whenever connectivity is available.
 - Generates activation keys locally, including while offline if the last known
   state permits generation.
@@ -14,7 +16,8 @@ Permanent local backend installed with NSSM by the desktop application.
 - Repeatedly attempts to insert pending records into PostgreSQL, clearing the
   queue only after a committed upload.
 
-Default local storage on Windows is `%ProgramData%\KeyGenRMS`.
+Default local storage on Windows is `%ProgramData%\KeyGenRMS`, including
+`AUTHORIZED.txt`, `MAINTENANCE.txt`, and the pending/upload logs.
 
 ## Local API
 

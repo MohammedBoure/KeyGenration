@@ -59,9 +59,11 @@ New-Item -ItemType Directory -Force -Path $TargetDirectory, $ServiceDirectory, $
 Copy-Item -LiteralPath $DesktopExecutable -Destination (Join-Path $TargetDirectory "ActivateurRMS.exe") -Force
 Copy-Item -LiteralPath $ServiceExecutable -Destination (Join-Path $ServiceDirectory "KeyGenService.exe") -Force
 Copy-Item -LiteralPath $NssmExecutable -Destination (Join-Path $NssmDirectory "nssm.exe") -Force
-$ObsoleteRuntimeTemplate = Join-Path $TargetDirectory ".env.example"
-if (Test-Path -LiteralPath $ObsoleteRuntimeTemplate -PathType Leaf) {
-    Remove-Item -LiteralPath $ObsoleteRuntimeTemplate -Force
+foreach ($runtimeConfiguration in @(".env", ".env.example")) {
+    $packagedRuntimeConfiguration = Join-Path $TargetDirectory $runtimeConfiguration
+    if (Test-Path -LiteralPath $packagedRuntimeConfiguration -PathType Leaf) {
+        Remove-Item -LiteralPath $packagedRuntimeConfiguration -Force
+    }
 }
 
 $PackagedFiles = [ordered]@{
