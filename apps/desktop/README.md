@@ -4,13 +4,16 @@ Native Windows Rust interface and NSSM installer.
 
 ## Behavior
 
-- Opens the generator window and checks the local `KeyGenService` health endpoint.
+- Opens the generator window, verifies that the Windows `KeyGenService`
+  installed through NSSM is registered, then checks its local health endpoint.
+- If the registered service is stopped, attempts to start it without requiring
+  a fresh PostgreSQL authorization.
 - Accepts only the current `local-queue-v1` backend mode; an obsolete installed
   service is upgraded through the normal installation path.
-- When no current backend is running, asks for administrator permission and
-  runs `KeyGenService.exe --authorize-install`.
-- Installation proceeds only when PostgreSQL is reachable and
-  `server_control.status` is `1`.
+- When no current service is installed, runs
+  `KeyGenService.exe --authorize-install`; installation proceeds only when
+  PostgreSQL is reachable and `server_control.status` is `1`.
+- Requests administrator permission only after that authorization succeeds.
 - Once installed, sends generation requests to the local service at
   `http://127.0.0.1:45632/generate_key`.
 

@@ -20,10 +20,11 @@ Default address: `http://127.0.0.1:45632`.
 }
 ```
 
-The desktop UI requires `backend_mode` to match; otherwise it upgrades the
-installed service after an authorized online check. A fresh service does not
-listen until PostgreSQL returns status `1` and its local authorization marker
-has been created.
+The desktop UI first requires a registered Windows `KeyGenService` service,
+starts it if it is stopped, and requires `backend_mode` to match. Otherwise it
+installs or upgrades the service after an authorized online check. A fresh
+service does not listen until PostgreSQL returns status `1` and its local
+authorization marker has been created.
 
 ### `POST /generate_key`
 

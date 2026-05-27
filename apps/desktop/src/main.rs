@@ -252,9 +252,16 @@ fn install_service() -> AppResult<String> {
 mod gui {
     use super::*;
     use std::ptr::{null, null_mut};
-    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::Foundation::{
+        ERROR_SERVICE_ALREADY_RUNNING, ERROR_SERVICE_DOES_NOT_EXIST, GetLastError, HWND, LPARAM,
+        LRESULT, WPARAM,
+    };
     use windows_sys::Win32::Graphics::Gdi::{COLOR_WINDOW, UpdateWindow};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::System::Services::{
+        CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatus, SC_MANAGER_CONNECT,
+        SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_START, SERVICE_STATUS, StartServiceW,
+    };
     use windows_sys::Win32::UI::Controls::EM_SETREADONLY;
     use windows_sys::Win32::UI::Shell::{IsUserAnAdmin, ShellExecuteW};
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -288,6 +295,13 @@ mod gui {
         code: HWND,
         key: HWND,
         status: HWND,
+    }
+
+    #[derive(Clone, Copy)]
+    enum RegisteredServiceState {
+        Missing,
+        Stopped,
+        Running,
     }
 
     pub fn run() -> AppResult<()> {
@@ -414,7 +428,38 @@ mod gui {
     }
 
     unsafe fn initialize_backend(window: HWND, controls: &Controls) {
-        if local_service_ready().is_ok() {
+        let registered_service = match registered_service_state() {
+            Ok(state) => state,
+            Err(error) => {
+                set_text(controls.status, &error);
+                message_box(window, "Verification du service impossible", &error);
+                return;
+            }
+        };
+
+        if matches!(registered_service, RegisteredServiceState::Stopped) {
+            set_text(controls.status, "Demarrage du service local installe...");
+            UpdateWindow(controls.status);
+            if let Err(error) = start_registered_service() {
+                if IsUserAnAdmin() == 0 {
+                    set_text(
+                        controls.status,
+                        "Autorisation Windows requise pour demarrer le service...",
+                    );
+                    if let Err(error) = relaunch_elevated(window) {
+                        set_text(controls.status, &error);
+                    }
+                    return;
+                }
+                set_text(controls.status, &error);
+                message_box(window, "Demarrage du service impossible", &error);
+                return;
+            }
+        }
+
+        if !matches!(registered_service, RegisteredServiceState::Missing)
+            && wait_for_local_service()
+        {
             set_text(
                 controls.status,
                 "Pret. Saisissez l'identifiant puis generez la cle.",
@@ -468,6 +513,78 @@ mod gui {
                 message_box(window, "Installation impossible", &error);
             }
         }
+    }
+
+    unsafe fn registered_service_state() -> AppResult<RegisteredServiceState> {
+        let manager = OpenSCManagerW(null(), null(), SC_MANAGER_CONNECT);
+        if manager.is_null() {
+            return Err(format!(
+                "Acces au gestionnaire de services impossible ({}).",
+                GetLastError()
+            ));
+        }
+        let service_name = wide(SERVICE_NAME);
+        let service = OpenServiceW(manager, service_name.as_ptr(), SERVICE_QUERY_STATUS);
+        if service.is_null() {
+            let error = GetLastError();
+            CloseServiceHandle(manager);
+            return if error == ERROR_SERVICE_DOES_NOT_EXIST {
+                Ok(RegisteredServiceState::Missing)
+            } else {
+                Err(format!("Lecture du service impossible ({error})."))
+            };
+        }
+        CloseServiceHandle(manager);
+
+        let mut status: SERVICE_STATUS = std::mem::zeroed();
+        let queried = QueryServiceStatus(service, &mut status);
+        let error = GetLastError();
+        CloseServiceHandle(service);
+        if queried == 0 {
+            return Err(format!("Etat du service inaccessible ({error})."));
+        }
+        if status.dwCurrentState == SERVICE_RUNNING {
+            Ok(RegisteredServiceState::Running)
+        } else {
+            Ok(RegisteredServiceState::Stopped)
+        }
+    }
+
+    unsafe fn start_registered_service() -> AppResult<()> {
+        let manager = OpenSCManagerW(null(), null(), SC_MANAGER_CONNECT);
+        if manager.is_null() {
+            return Err(format!(
+                "Acces au gestionnaire de services impossible ({}).",
+                GetLastError()
+            ));
+        }
+        let service_name = wide(SERVICE_NAME);
+        let service = OpenServiceW(manager, service_name.as_ptr(), SERVICE_START);
+        CloseServiceHandle(manager);
+        if service.is_null() {
+            return Err(format!(
+                "Demarrage du service non autorise ({}).",
+                GetLastError()
+            ));
+        }
+        let started = StartServiceW(service, 0, null());
+        let error = GetLastError();
+        CloseServiceHandle(service);
+        if started == 0 && error != ERROR_SERVICE_ALREADY_RUNNING {
+            Err(format!("Demarrage du service impossible ({error})."))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn wait_for_local_service() -> bool {
+        for _ in 0..4 {
+            if local_service_ready().is_ok() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        false
     }
 
     unsafe fn generate_clicked(controls: &Controls) {
