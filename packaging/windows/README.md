@@ -28,3 +28,12 @@ The local configuration should use an account restricted to:
 - `INSERT` on `activation_logs`.
 
 Do not distribute or expose the local `.env` containing a database password.
+
+On the managed computer, the packaged UI can administer its local service:
+
+```powershell
+.\ActivateurRMS.exe --install
+.\ActivateurRMS.exe --uninstall
+```
+
+`--unstall` is accepted as an alias for `--uninstall`.

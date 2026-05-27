@@ -23,6 +23,18 @@ Native Windows Rust interface and NSSM installer.
 
 The UI does not generate keys or write to PostgreSQL itself.
 
+## Command Line
+
+```powershell
+.\ActivateurRMS.exe --install
+.\ActivateurRMS.exe --uninstall
+```
+
+`--unstall` is also accepted as an alias for `--uninstall`. Both service
+operations request administrator elevation when necessary. Uninstall removes
+the Windows service and `%ProgramFiles%\KeyGenRMS`, but preserves local key
+records in `%ProgramData%\KeyGenRMS`.
+
 ## Build
 
 ```powershell

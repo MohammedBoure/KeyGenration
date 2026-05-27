@@ -35,6 +35,22 @@ SHA256SUMS.txt
 إذا كانت القيمة `0` أو تعذر الاتصال أثناء التثبيت الأول، تبقى الواجهة ظاهرة
 لكن لا يكتمل تجهيز backend إلى أن يتوفر الاتصال وتصبح الحالة `1`.
 
+## أوامر CMD
+
+يمكن إدارة خدمة backend المحلية مباشرة من `cmd` أو PowerShell:
+
+```powershell
+.\ActivateurRMS.exe --install
+.\ActivateurRMS.exe --uninstall
+```
+
+- `--install`: يثبت الخدمة أو يصلح/يحدث خدمة موجودة، بعد نجاح تفويض PostgreSQL بالحالة `1`.
+- `--uninstall`: يوقف ويحذف خدمة Windows وملفات backend في `%ProgramFiles%\KeyGenRMS`.
+- `--unstall`: اسم بديل مقبول للأمر `--uninstall`.
+
+تطلب الأوامر صلاحية Administrator تلقائيا عند الحاجة. لا يحذف أمر الإزالة
+ملفات المفاتيح والطابور في `%ProgramData%\KeyGenRMS` حتى لا تضيع السجلات غير المزامنة.
+
 ## إنشاء المفتاح
 
 بعد جاهزية الخدمة:

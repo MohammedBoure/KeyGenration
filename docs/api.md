@@ -70,7 +70,7 @@ transaction when PostgreSQL becomes reachable:
 INSERT INTO activation_logs
     (sync_id, request_code, activation_key, generated_at, device_ip)
 VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (sync_id) DO NOTHING;
+ON CONFLICT DO NOTHING;
 ```
 
 `sync_id` makes retrying an interrupted upload idempotent.

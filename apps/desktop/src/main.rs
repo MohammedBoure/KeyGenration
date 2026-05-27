@@ -30,6 +30,15 @@ const SERVICE_ENV_OPTIONS: [&str; 12] = [
 
 type AppResult<T> = Result<T, String>;
 
+#[derive(Clone, Debug, PartialEq)]
+enum LaunchMode {
+    Gui,
+    Install,
+    Uninstall,
+    Help,
+    Invalid(String),
+}
+
 #[derive(Deserialize)]
 struct GenerateResponse {
     activation_key: String,
@@ -161,6 +170,24 @@ fn run_optional(program: &Path, arguments: &[&str]) {
     let _ = Command::new(program).args(arguments).output();
 }
 
+fn launch_mode<I, S>(arguments: I) -> LaunchMode
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let arguments: Vec<String> = arguments
+        .into_iter()
+        .map(|argument| argument.as_ref().to_owned())
+        .collect();
+    match arguments.as_slice() {
+        [] => LaunchMode::Gui,
+        [argument] if argument == "--install" => LaunchMode::Install,
+        [argument] if argument == "--uninstall" || argument == "--unstall" => LaunchMode::Uninstall,
+        [argument] if argument == "--help" || argument == "-h" => LaunchMode::Help,
+        _ => LaunchMode::Invalid(arguments.join(" ")),
+    }
+}
+
 fn bundled_service_path() -> AppResult<PathBuf> {
     let service = bundle_root()?
         .join("KeyGenService")
@@ -169,6 +196,14 @@ fn bundled_service_path() -> AppResult<PathBuf> {
         return Err(format!("Backend Rust manquant: {}", service.display()));
     }
     Ok(service)
+}
+
+fn bundled_nssm_path() -> AppResult<PathBuf> {
+    let nssm = bundle_root()?.join("nssm").join("nssm.exe");
+    if !nssm.is_file() {
+        return Err(format!("NSSM manquant: {}", nssm.display()));
+    }
+    Ok(nssm)
 }
 
 fn verify_install_authorization(service: &Path) -> AppResult<()> {
@@ -205,12 +240,8 @@ fn service_environment_contents() -> AppResult<String> {
 }
 
 fn install_service() -> AppResult<String> {
-    let source_root = bundle_root()?;
     let source_service = bundled_service_path()?;
-    let source_nssm = source_root.join("nssm").join("nssm.exe");
-    if !source_nssm.is_file() {
-        return Err(format!("NSSM manquant: {}", source_nssm.display()));
-    }
+    let source_nssm = bundled_nssm_path()?;
     verify_install_authorization(&source_service)?;
 
     let destination = install_root()?;
@@ -245,6 +276,20 @@ fn install_service() -> AppResult<String> {
     run_command(&installed_nssm, &["start", SERVICE_NAME])?;
 
     Ok("Service Rust installe et demarre.".to_owned())
+}
+
+fn uninstall_service() -> AppResult<String> {
+    let source_nssm = bundled_nssm_path()?;
+    run_optional(&source_nssm, &["stop", SERVICE_NAME, "confirm"]);
+    run_optional(&source_nssm, &["remove", SERVICE_NAME, "confirm"]);
+    std::thread::sleep(Duration::from_millis(500));
+
+    let destination = install_root()?;
+    if destination.exists() {
+        fs::remove_dir_all(&destination)
+            .map_err(|error| format!("Suppression du backend local impossible: {error}"))?;
+    }
+    Ok("Service backend local supprime. Les donnees locales sont conservees.".to_owned())
 }
 
 #[cfg(windows)]
@@ -349,6 +394,74 @@ mod gui {
             }
         }
         Ok(())
+    }
+
+    pub fn run_cli_command(mode: LaunchMode) -> i32 {
+        unsafe {
+            match mode {
+                LaunchMode::Help => {
+                    notify(
+                        "Commandes",
+                        "ActivateurRMS.exe --install\nActivateurRMS.exe --uninstall\n\n--unstall est aussi accepte comme alias.",
+                        false,
+                    );
+                    0
+                }
+                LaunchMode::Invalid(arguments) => {
+                    notify(
+                        "Option invalide",
+                        &format!(
+                            "Option invalide: {arguments}\n\nUtilisez --install ou --uninstall."
+                        ),
+                        true,
+                    );
+                    2
+                }
+                LaunchMode::Install | LaunchMode::Uninstall => {
+                    if IsUserAnAdmin() == 0 {
+                        return match relaunch_cli_elevated(&mode) {
+                            Ok(()) => 0,
+                            Err(error) => {
+                                notify("Elevation impossible", &error, true);
+                                1
+                            }
+                        };
+                    }
+                    let result =
+                        match mode {
+                            LaunchMode::Install => install_service().and_then(|message| {
+                                if wait_for_local_service() {
+                                    Ok(message)
+                                } else {
+                                    Err("Service installe mais le backend local ne repond pas."
+                                        .to_owned())
+                                }
+                            }),
+                            LaunchMode::Uninstall => uninstall_service().and_then(|message| {
+                                match registered_service_state()? {
+                                    RegisteredServiceState::Missing => Ok(message),
+                                    _ => Err(
+                                        "Le service Windows existe encore apres la suppression."
+                                            .to_owned(),
+                                    ),
+                                }
+                            }),
+                            _ => unreachable!(),
+                        };
+                    match result {
+                        Ok(message) => {
+                            notify("Activateur RMS", &message, false);
+                            0
+                        }
+                        Err(error) => {
+                            notify("Operation impossible", &error, true);
+                            1
+                        }
+                    }
+                }
+                LaunchMode::Gui => 0,
+            }
+        }
     }
 
     pub fn show_fatal_error(error: &str) {
@@ -646,6 +759,32 @@ mod gui {
         }
     }
 
+    unsafe fn relaunch_cli_elevated(mode: &LaunchMode) -> AppResult<()> {
+        let executable =
+            env::current_exe().map_err(|error| format!("Relance impossible: {error}"))?;
+        let argument = match mode {
+            LaunchMode::Install => "--install",
+            LaunchMode::Uninstall => "--uninstall",
+            _ => return Err("Commande administrative invalide.".to_owned()),
+        };
+        let verb = wide("runas");
+        let executable = wide(&executable.to_string_lossy());
+        let arguments = wide(argument);
+        let outcome = ShellExecuteW(
+            null_mut(),
+            verb.as_ptr(),
+            executable.as_ptr(),
+            arguments.as_ptr(),
+            null(),
+            SW_SHOWNORMAL,
+        ) as isize;
+        if outcome > 32 {
+            Ok(())
+        } else {
+            Err("Elevation refusee ou impossible.".to_owned())
+        }
+    }
+
     unsafe fn control_state(window: HWND) -> *mut Controls {
         GetWindowLongPtrW(window, GWLP_USERDATA) as *mut Controls
     }
@@ -733,6 +872,20 @@ mod gui {
         );
     }
 
+    unsafe fn notify(title: &str, value: &str, error: bool) {
+        let icon = if error {
+            MB_ICONERROR
+        } else {
+            MB_ICONINFORMATION
+        };
+        MessageBoxW(
+            null_mut(),
+            wide(value).as_ptr(),
+            wide(title).as_ptr(),
+            MB_OK | icon,
+        );
+    }
+
     fn wide(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(std::iter::once(0)).collect()
     }
@@ -740,8 +893,14 @@ mod gui {
 
 #[cfg(windows)]
 fn main() {
-    if let Err(error) = gui::run() {
-        gui::show_fatal_error(&error);
+    let mode = launch_mode(env::args().skip(1));
+    match mode {
+        LaunchMode::Gui => {
+            if let Err(error) = gui::run() {
+                gui::show_fatal_error(&error);
+            }
+        }
+        mode => std::process::exit(gui::run_cli_command(mode)),
     }
 }
 
@@ -774,5 +933,18 @@ mod tests {
             Ok("http://127.0.0.1:45639/health".to_owned())
         );
         assert!(local_endpoint_url("not-a-socket", "health").is_err());
+    }
+
+    #[test]
+    fn parses_backend_service_command_options() {
+        assert_eq!(launch_mode(Vec::<String>::new()), LaunchMode::Gui);
+        assert_eq!(launch_mode(["--install"]), LaunchMode::Install);
+        assert_eq!(launch_mode(["--uninstall"]), LaunchMode::Uninstall);
+        assert_eq!(launch_mode(["--unstall"]), LaunchMode::Uninstall);
+        assert_eq!(launch_mode(["--help"]), LaunchMode::Help);
+        assert_eq!(
+            launch_mode(["--other"]),
+            LaunchMode::Invalid("--other".to_owned())
+        );
     }
 }
