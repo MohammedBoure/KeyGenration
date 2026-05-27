@@ -18,7 +18,7 @@ Three constraints matter:
 | --- | --- | --- |
 | `.env` beside `ActivateurRMS.exe` | Generator database account and `KEYGEN_TOKEN_*_SECRET` values | Managed generator computer only |
 | `%ProgramFiles%\KeyGenRMS\.env` | Installed service copy, including tokens | Managed generator computer only |
-| `services\cloud-api\.env` | Dashboard database account | Administrator computer only |
+| `services\local-dashboard\.env` | Dashboard database account | Administrator computer only |
 
 Mandatory rules:
 

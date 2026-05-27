@@ -13,7 +13,7 @@
 ## التشغيل
 
 ```powershell
-cd .\services\cloud-api
+cd .\services\local-dashboard
 python -m pip install -r .\requirements.txt
 Copy-Item .\.env.example .\.env
 # ضع بيانات PostgreSQL التي تستطيع قراءة السجلات وتعديل الحالة.

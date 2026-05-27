@@ -3,8 +3,8 @@ import os
 
 import uvicorn
 
-from keygen_api.admin_web import create_admin_app
-from keygen_api.config import load_environment
+from dashboard_app.admin_web import create_admin_app
+from dashboard_app.config import load_environment
 
 
 app = create_admin_app()

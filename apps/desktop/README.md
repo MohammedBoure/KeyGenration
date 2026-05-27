@@ -25,6 +25,14 @@ Native Windows Rust interface and NSSM installer.
 
 The UI does not generate keys or write to PostgreSQL itself.
 
+## Source Layout
+
+| Module | Responsibility |
+| --- | --- |
+| `src/main.rs` | Process entry point, command selection, and native Windows UI |
+| `src/api.rs` | Loopback backend requests, readiness checks, and request-code validation |
+| `src/installer.rs` | Bundle discovery, NSSM registration, and installed service `.env` generation |
+
 ## Command Line
 
 ```powershell

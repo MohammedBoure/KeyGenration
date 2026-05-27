@@ -14,7 +14,7 @@ published as a public service.
 ## Start the Dashboard
 
 ```powershell
-cd .\services\cloud-api
+cd .\services\local-dashboard
 python -m pip install -r .\requirements.txt
 Copy-Item .\.env.example .\.env
 # Add PostgreSQL settings for an account that can read logs and edit status.

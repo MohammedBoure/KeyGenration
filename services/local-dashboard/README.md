@@ -1,7 +1,6 @@
 # Local PostgreSQL Administration Dashboard
 
-This directory keeps its historical name, but it no longer exposes a Cloud
-API used by the Windows client. It provides:
+This local-only service provides:
 
 - PostgreSQL table initialization and optional SQLite import through `app.py`.
 - A local FastAPI dashboard through `fastapi_app.py`.
@@ -25,3 +24,12 @@ The dashboard reads `activation_logs`, deletes an individual record after two
 browser confirmations, and updates `server_control.status`. Its PostgreSQL
 account therefore needs `DELETE` on `activation_logs` when deletion is used.
 It binds locally and rejects non-local requests by default.
+
+## Source Layout
+
+| Path | Responsibility |
+| --- | --- |
+| `app.py` | PostgreSQL initialization and optional SQLite import command |
+| `fastapi_app.py` | Local dashboard server entry point |
+| `dashboard_app/` | Configuration, queries, routes, and dashboard template |
+| `tests/` | Dashboard and database configuration tests |

@@ -1,104 +1,35 @@
-use chrono::{SecondsFormat, Utc};
+mod database;
+mod generation;
+mod http;
+mod storage;
+
+use database::DatabaseConfig;
+use http::handle_request;
 use keygen_common::{GenerationToken, RuntimeEnvironment};
-use native_tls::TlsConnector;
-use postgres::config::SslMode;
-use postgres::{Client, Config as PostgresConfig, NoTls};
-use postgres_native_tls::MakeTlsConnector;
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::env;
 use std::error::Error;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
+use storage::{
+    PendingUpload, StoragePaths, append_line, load_pending_uploads, lock_mutex, now_timestamp,
+    save_pending_uploads,
+};
+use tiny_http::Server;
+
+#[cfg(test)]
+use generation::{generate_activation_key, valid_request_code};
 
 const DEFAULT_LISTEN_ADDRESS: &str = "127.0.0.1:45632";
-const BACKEND_MODE: &str = "local-queue-v1";
 
 type AppResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 #[derive(Clone)]
-struct DatabaseConfig {
-    host: String,
-    port: u16,
-    database: String,
-    user: String,
-    password: String,
-    ssl_mode: String,
-    connect_timeout: Duration,
-}
-
-impl DatabaseConfig {
-    fn from_environment(environment: &RuntimeEnvironment) -> AppResult<Self> {
-        Ok(Self {
-            host: required_setting(environment, "PGHOST")?,
-            port: required_setting(environment, "PGPORT")?.parse()?,
-            database: required_setting(environment, "PGDATABASE")?,
-            user: required_setting(environment, "PGUSER")?,
-            password: required_setting(environment, "PGPASSWORD")?,
-            ssl_mode: environment
-                .value("PGSSLMODE")
-                .unwrap_or_else(|| "require".to_owned()),
-            connect_timeout: seconds_from_environment(environment, "PGCONNECT_TIMEOUT", 10),
-        })
-    }
-
-    fn connect(&self) -> AppResult<Client> {
-        let mut config = PostgresConfig::new();
-        config
-            .host(&self.host)
-            .port(self.port)
-            .dbname(&self.database)
-            .user(&self.user)
-            .password(&self.password)
-            .connect_timeout(self.connect_timeout);
-
-        match self.ssl_mode.trim().to_ascii_lowercase().as_str() {
-            "disable" => {
-                config.ssl_mode(SslMode::Disable);
-                Ok(config.connect(NoTls)?)
-            }
-            "require" => {
-                config.ssl_mode(SslMode::Require);
-                let mut tls = TlsConnector::builder();
-                // PostgreSQL sslmode=require encrypts transport without validating its certificate.
-                tls.danger_accept_invalid_certs(true);
-                Ok(config.connect(MakeTlsConnector::new(tls.build()?))?)
-            }
-            "verify-full" => {
-                config.ssl_mode(SslMode::Require);
-                Ok(config.connect(MakeTlsConnector::new(TlsConnector::new()?))?)
-            }
-            _ => Err("PGSSLMODE must be disable, require, or verify-full.".into()),
-        }
-    }
-
-    fn read_status(&self) -> AppResult<String> {
-        let mut client = self.connect()?;
-        let row = client.query_opt("SELECT status FROM server_control WHERE id = 1", &[])?;
-        row.map(|record| record.get::<_, String>(0))
-            .ok_or_else(|| "The server_control status row is missing.".into())
-    }
-
-    fn require_active_installation(&self) -> AppResult<()> {
-        match self.read_status()?.trim() {
-            "1" => Ok(()),
-            "0" => Err("Installation refusee: le generateur est desactive.".into()),
-            _ => Err("Installation refusee: etat PostgreSQL invalide.".into()),
-        }
-    }
-}
-
-#[derive(Clone)]
-struct Config {
+pub(crate) struct Config {
     database: DatabaseConfig,
-    tokens: Vec<GenerationToken>,
+    pub(crate) tokens: Vec<GenerationToken>,
     listen_address: String,
     status_interval: Duration,
     upload_interval: Duration,
@@ -126,72 +57,11 @@ impl Config {
     }
 }
 
-#[derive(Clone, Debug)]
-struct StoragePaths {
-    primary_log: PathBuf,
-    cache_log: PathBuf,
-    pending_uploads: PathBuf,
-    uploaded_log: PathBuf,
-    authorization_file: PathBuf,
-    maintenance_file: PathBuf,
-}
-
-impl StoragePaths {
-    fn from_environment(environment: &RuntimeEnvironment) -> AppResult<Self> {
-        let override_dir = environment.value("KEYGEN_DATA_DIR").map(PathBuf::from);
-        let base_dir = match &override_dir {
-            Some(path) => path.clone(),
-            None => default_data_dir(),
-        };
-        fs::create_dir_all(&base_dir)?;
-
-        let primary_log = environment
-            .value("KEYGEN_PRIMARY_LOG")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| match override_dir {
-                Some(_) => base_dir.join("generated_keys.txt"),
-                None => default_primary_log(),
-            });
-
-        Ok(Self {
-            primary_log,
-            cache_log: base_dir.join("netcache.dat"),
-            pending_uploads: base_dir.join("pending_uploads.json"),
-            uploaded_log: base_dir.join("uploaded.log"),
-            authorization_file: base_dir.join("AUTHORIZED.txt"),
-            maintenance_file: base_dir.join("MAINTENANCE.txt"),
-        })
-    }
-}
-
-#[cfg(windows)]
-fn default_data_dir() -> PathBuf {
-    env::var_os("PROGRAMDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
-        .join("KeyGenRMS")
-}
-
-#[cfg(not(windows))]
-fn default_data_dir() -> PathBuf {
-    env::temp_dir().join("KeyGenService").join("KeyGenRMS")
-}
-
-#[cfg(windows)]
-fn default_primary_log() -> PathBuf {
-    default_data_dir().join("generated_keys.txt")
-}
-
-#[cfg(not(windows))]
-fn default_primary_log() -> PathBuf {
-    default_data_dir().join("generated_keys.txt")
-}
-
-struct AppState {
-    config: Config,
+pub(crate) struct AppState {
+    pub(crate) config: Config,
     maintenance: AtomicBool,
     queue_lock: Mutex<()>,
-    paths: StoragePaths,
+    pub(crate) paths: StoragePaths,
 }
 
 impl AppState {
@@ -206,7 +76,7 @@ impl AppState {
         })
     }
 
-    fn is_in_maintenance(&self) -> bool {
+    pub(crate) fn is_in_maintenance(&self) -> bool {
         self.maintenance.load(Ordering::Relaxed) || self.paths.maintenance_file.exists()
     }
 
@@ -249,7 +119,7 @@ impl AppState {
         self.apply_remote_status(&self.config.database.read_status()?)
     }
 
-    fn save_generated_key(
+    pub(crate) fn save_generated_key(
         &self,
         request_code: &str,
         activation_key: &str,
@@ -330,35 +200,6 @@ impl AppState {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct GenerateRequest {
-    request_code: Option<String>,
-    app_type: Option<String>,
-}
-
-#[derive(Clone, Deserialize, PartialEq, Serialize)]
-struct PendingUpload {
-    #[serde(default)]
-    sync_id: String,
-    request_code: String,
-    activation_key: String,
-    timestamp: String,
-    ip: String,
-}
-
-impl PendingUpload {
-    fn upload_id(&self) -> String {
-        if self.sync_id.is_empty() {
-            format!(
-                "legacy:{}:{}:{}",
-                self.timestamp, self.request_code, self.activation_key
-            )
-        } else {
-            self.sync_id.clone()
-        }
-    }
-}
-
 fn main() -> AppResult<()> {
     let environment = RuntimeEnvironment::load()?;
     if env::args().any(|argument| argument == "--authorize-install") {
@@ -412,171 +253,6 @@ fn spawn_uploader(state: Arc<AppState>) {
     });
 }
 
-fn handle_request(mut request: Request, state: &Arc<AppState>) {
-    match (request.method(), request.url()) {
-        (&Method::Post, "/generate_key") => {
-            let response = generate_key_response(&mut request, state);
-            respond_json(request, response.0, &response.1);
-        }
-        (&Method::Get, "/health") => respond_json(
-            request,
-            200,
-            &json!({
-                "status": "ok",
-                "backend_mode": BACKEND_MODE,
-                "token_names": state.config.tokens.iter()
-                    .map(|token| token.name.as_str())
-                    .collect::<Vec<_>>(),
-                "authorized": state.paths.authorization_file.exists(),
-                "maintenance": state.is_in_maintenance(),
-                "pending_uploads": load_pending_uploads(&state.paths.pending_uploads)
-                    .map(|records| records.len())
-                    .unwrap_or_default()
-            }),
-        ),
-        _ => respond_json(request, 404, &json!({"error": "Not found"})),
-    }
-}
-
-fn generate_key_response(request: &mut Request, state: &Arc<AppState>) -> (u16, Value) {
-    if state.is_in_maintenance() {
-        return (
-            503,
-            json!({
-                "error": "Server is under maintenance. Key generation is disabled.",
-                "status": "maintenance_mode"
-            }),
-        );
-    }
-
-    let mut body = String::new();
-    if request.as_reader().read_to_string(&mut body).is_err() {
-        return (400, json!({"error": "Unable to read JSON body"}));
-    }
-    let payload: GenerateRequest = match serde_json::from_str(&body) {
-        Ok(payload) => payload,
-        Err(_) => return (400, json!({"error": "Invalid JSON body"})),
-    };
-    let Some(raw_code) = payload.request_code else {
-        return (400, json!({"error": "Missing 'request_code' in JSON body"}));
-    };
-    let request_code = raw_code.trim().to_ascii_uppercase();
-    if !valid_request_code(&request_code) {
-        return (
-            400,
-            json!({"error": "Invalid request_code format. Expected 'XXXX-XXXX-XXXX'."}),
-        );
-    }
-    let app_type = payload
-        .app_type
-        .as_deref()
-        .unwrap_or_else(|| state.config.tokens[0].name.as_str());
-    let Some(activation_key) =
-        generate_activation_key(&request_code, app_type, &state.config.tokens)
-    else {
-        return (400, json!({"error": "Invalid app_type."}));
-    };
-    let client_ip = request
-        .remote_addr()
-        .map(|address| address.ip().to_string())
-        .unwrap_or_else(|| "unknown".to_owned());
-
-    if let Err(error) = state.save_generated_key(&request_code, &activation_key, &client_ip) {
-        eprintln!("[GENERATE] {error}");
-        return (503, json!({"error": "Key generation failed."}));
-    }
-
-    (
-        200,
-        json!({
-            "request_code": request_code,
-            "activation_key": activation_key,
-            "app_type": app_type,
-            "status": "generated_and_queued"
-        }),
-    )
-}
-
-fn respond_json(request: Request, status_code: u16, body: &Value) {
-    let content_type =
-        Header::from_bytes("Content-Type", "application/json; charset=utf-8").unwrap();
-    let response = Response::from_string(body.to_string())
-        .with_status_code(StatusCode(status_code))
-        .with_header(content_type);
-    if let Err(error) = request.respond(response) {
-        eprintln!("[HTTP] Failed to send response: {error}");
-    }
-}
-
-fn generate_activation_key(
-    request_code: &str,
-    app_type: &str,
-    tokens: &[GenerationToken],
-) -> Option<String> {
-    let secret = &tokens.iter().find(|token| token.name == app_type)?.secret;
-    let digest = Sha256::digest(format!("{request_code}::{secret}").as_bytes());
-    let encoded = digest
-        .iter()
-        .map(|byte| format!("{byte:02X}"))
-        .collect::<String>();
-    let key = &encoded[..16];
-    Some(
-        (0..16)
-            .step_by(4)
-            .map(|start| &key[start..start + 4])
-            .collect::<Vec<_>>()
-            .join("-"),
-    )
-}
-
-fn valid_request_code(request_code: &str) -> bool {
-    request_code.len() == 14
-        && request_code.as_bytes()[4] == b'-'
-        && request_code.as_bytes()[9] == b'-'
-}
-
-fn required_setting(environment: &RuntimeEnvironment, name: &str) -> AppResult<String> {
-    environment
-        .value(name)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| format!("{name} is required for PostgreSQL synchronization.").into())
-}
-
-fn load_pending_uploads(path: &Path) -> AppResult<Vec<PendingUpload>> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let contents = fs::read_to_string(path)?;
-    if contents.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    Ok(serde_json::from_str(&contents)?)
-}
-
-fn save_pending_uploads(path: &Path, records: &[PendingUpload]) -> AppResult<()> {
-    ensure_parent_dir(path)?;
-    fs::write(path, serde_json::to_vec_pretty(records)?)?;
-    Ok(())
-}
-
-fn append_line(path: &Path, line: &str) -> AppResult<()> {
-    ensure_parent_dir(path)?;
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    file.write_all(line.as_bytes())?;
-    Ok(())
-}
-
-fn ensure_parent_dir(path: &Path) -> AppResult<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    Ok(())
-}
-
-fn now_timestamp() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false)
-}
-
 fn seconds_from_environment(
     environment: &RuntimeEnvironment,
     variable: &str,
@@ -588,10 +264,6 @@ fn seconds_from_environment(
             .and_then(|value| value.parse().ok())
             .unwrap_or(default),
     )
-}
-
-fn lock_mutex<T>(lock: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[cfg(test)]

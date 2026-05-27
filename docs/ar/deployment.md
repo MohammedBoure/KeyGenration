@@ -27,7 +27,7 @@ FastAPI أن تكون مفتوحة كي يعمل مولد المفاتيح.
 من جذر المشروع:
 
 ```powershell
-cd .\services\cloud-api
+cd .\services\local-dashboard
 python -m pip install -r .\requirements.txt
 Copy-Item .\.env.example .\.env
 # حرر .env ببيانات حساب يستطيع إنشاء/تهيئة الجداول.
@@ -100,7 +100,7 @@ KEYGEN_TOKEN_JEWELRY_SECRET=replace-with-private-jewelry-token
 
 ### ملف لوحة الإدارة
 
-في `services\cloud-api\.env`:
+في `services\local-dashboard\.env`:
 
 ```dotenv
 PGHOST=database-host
@@ -186,7 +186,7 @@ cd .\ActivateurRMS
 ## تشغيل لوحة الإدارة
 
 ```powershell
-cd .\services\cloud-api
+cd .\services\local-dashboard
 python .\fastapi_app.py
 ```
 

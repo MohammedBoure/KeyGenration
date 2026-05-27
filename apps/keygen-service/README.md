@@ -21,6 +21,16 @@ Permanent local backend installed with NSSM by the desktop application.
 Default local storage on Windows is `%ProgramData%\KeyGenRMS`, including
 `AUTHORIZED.txt`, `MAINTENANCE.txt`, and the pending/upload logs.
 
+## Source Layout
+
+| Module | Responsibility |
+| --- | --- |
+| `src/main.rs` | Startup, authorization state, polling, and upload orchestration |
+| `src/database.rs` | PostgreSQL settings, TLS connection, and remote status access |
+| `src/http.rs` | Loopback HTTP API and JSON responses |
+| `src/storage.rs` | Persistent local logs and pending upload queue |
+| `src/generation.rs` | Request-code checks and deterministic key generation |
+
 ## Local API
 
 ```text

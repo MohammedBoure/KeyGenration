@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | ملف الحزمة بجانب `ActivateurRMS.exe` | حساب اتصال المولد وأسرار `KEYGEN_TOKEN_*_SECRET` | على جهاز مولد تديره فقط |
 | `%ProgramFiles%\KeyGenRMS\.env` | نسخة إعداد الخدمة المثبتة بما فيها tokens | على جهاز المولد |
-| `services\cloud-api\.env` | حساب لوحة الإدارة | على جهاز الإدارة |
+| `services\local-dashboard\.env` | حساب لوحة الإدارة | على جهاز الإدارة |
 
 قواعد إلزامية:
 

@@ -8,7 +8,7 @@ from unittest.mock import patch
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVICE_ROOT))
 
-from keygen_api import db
+from dashboard_app import db
 
 
 class DatabaseConfigurationTests(unittest.TestCase):
@@ -30,7 +30,7 @@ class DatabaseConfigurationTests(unittest.TestCase):
 
         with (
             patch.dict(os.environ, configuration, clear=True),
-            patch("keygen_api.db.psycopg2.connect") as connect,
+            patch("dashboard_app.db.psycopg2.connect") as connect,
         ):
             db.get_db_connection()
 

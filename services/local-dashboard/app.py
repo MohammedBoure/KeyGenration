@@ -1,8 +1,8 @@
 import argparse
 
-from keygen_api.config import load_environment
-from keygen_api.db import init_db
-from keygen_api.migrations import migrate_from_sqlite
+from dashboard_app.config import load_environment
+from dashboard_app.db import init_db
+from dashboard_app.migrations import migrate_from_sqlite
 
 
 def parse_args():

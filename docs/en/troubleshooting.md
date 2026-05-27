@@ -93,7 +93,7 @@ cleared PostgreSQL. Before clearing records:
 The dashboard now requires every private PostgreSQL setting in its local `.env`:
 
 ```powershell
-cd .\services\cloud-api
+cd .\services\local-dashboard
 Copy-Item .\.env.example .\.env
 ```
 

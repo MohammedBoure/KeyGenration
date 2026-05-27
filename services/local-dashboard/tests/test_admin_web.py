@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVICE_ROOT))
 
-from keygen_api.admin_web import create_admin_app
+from dashboard_app.admin_web import create_admin_app
 
 
 class AdminWebTests(unittest.TestCase):
@@ -50,7 +50,7 @@ class AdminWebTests(unittest.TestCase):
         def cursor_context(_dict_rows=False):
             yield Cursor()
 
-        with patch("keygen_api.admin_web.db.db_cursor", cursor_context):
+        with patch("dashboard_app.admin_web.db.db_cursor", cursor_context):
             response = self.client.get("/api/status")
 
         self.assertEqual(response.status_code, 200)
@@ -67,7 +67,7 @@ class AdminWebTests(unittest.TestCase):
         def cursor_context(_dict_rows=False):
             yield Cursor()
 
-        with patch("keygen_api.admin_web.db.db_cursor", cursor_context):
+        with patch("dashboard_app.admin_web.db.db_cursor", cursor_context):
             accepted = self.client.put("/api/status", json={"status": "0"})
             rejected = self.client.put("/api/status", json={"status": "2"})
 
@@ -98,7 +98,7 @@ class AdminWebTests(unittest.TestCase):
             self.assertTrue(dict_rows)
             yield Cursor()
 
-        with patch("keygen_api.admin_web.db.db_cursor", cursor_context):
+        with patch("dashboard_app.admin_web.db.db_cursor", cursor_context):
             response = self.client.get("/api/activation-logs?limit=25")
 
         self.assertEqual(response.status_code, 200)
@@ -119,7 +119,7 @@ class AdminWebTests(unittest.TestCase):
         def cursor_context(_dict_rows=False):
             yield Cursor()
 
-        with patch("keygen_api.admin_web.db.db_cursor", cursor_context):
+        with patch("dashboard_app.admin_web.db.db_cursor", cursor_context):
             response = self.client.delete("/api/activation-logs/4")
 
         self.assertEqual(response.status_code, 200)
@@ -139,7 +139,7 @@ class AdminWebTests(unittest.TestCase):
         def cursor_context(_dict_rows=False):
             yield Cursor()
 
-        with patch("keygen_api.admin_web.db.db_cursor", cursor_context):
+        with patch("dashboard_app.admin_web.db.db_cursor", cursor_context):
             response = self.client.delete("/api/activation-logs/77")
 
         self.assertEqual(response.status_code, 404)

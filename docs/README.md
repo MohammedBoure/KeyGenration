@@ -49,7 +49,7 @@ Local FastAPI dashboard on admin computer --------> PostgreSQL
 | `apps\desktop` | Rust desktop UI and service administration commands |
 | `apps\keygen-service` | Rust local backend service |
 | `crates\config` | Shared `.env` and token configuration parsing |
-| `services\cloud-api` | Historical folder name for the local FastAPI dashboard and database initializer |
+| `services\local-dashboard` | Local FastAPI dashboard and PostgreSQL database initializer |
 | `packaging\windows` | Windows bundle and NSSM packaging scripts |
 | `docs\en` | Detailed English operational guides |
 | `docs\ar` | Detailed Arabic operational guides |

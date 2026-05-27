@@ -129,7 +129,7 @@ Windows displays a UAC prompt when administrator permission is needed.
 ### Local Administration Dashboard
 
 ```powershell
-cd .\services\cloud-api
+cd .\services\local-dashboard
 python -m pip install -r .\requirements.txt
 Copy-Item .\.env.example .\.env
 # Edit .env with the dashboard PostgreSQL account.
@@ -160,7 +160,7 @@ Uninstall removes `%ProgramFiles%\KeyGenRMS` but preserves
 | Beside `ActivateurRMS.exe` | Initial private `.env` on the managed computer |
 | `%ProgramFiles%\KeyGenRMS` | Installed service, NSSM, and service `.env` copy |
 | `%ProgramData%\KeyGenRMS` | Generated-key logs, pending queue, authorization, and maintenance state |
-| `services\cloud-api\.env` | Local dashboard configuration on the administration computer |
+| `services\local-dashboard\.env` | Local dashboard configuration on the administration computer |
 
 | Data file | Purpose |
 | --- | --- |

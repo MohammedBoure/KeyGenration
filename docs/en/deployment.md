@@ -17,7 +17,7 @@ connections. The dashboard does not need to be running for key generation.
 
 - Windows for building and operating the `.exe` bundle and NSSM service.
 - A Rust toolchain for building the UI and service.
-- Python 3 and the requirements in `services\cloud-api\requirements.txt` for
+- Python 3 and the requirements in `services\local-dashboard\requirements.txt` for
   database initialization and the dashboard.
 - PostgreSQL reachable over SSL from authorized operating computers.
 
@@ -26,7 +26,7 @@ connections. The dashboard does not need to be running for key generation.
 From the repository root:
 
 ```powershell
-cd .\services\cloud-api
+cd .\services\local-dashboard
 python -m pip install -r .\requirements.txt
 Copy-Item .\.env.example .\.env
 # Edit .env with an account allowed to initialize the tables.
@@ -99,7 +99,7 @@ Optional advanced settings:
 
 ## Dashboard `.env`
 
-Create `services\cloud-api\.env` locally on the administrator computer:
+Create `services\local-dashboard\.env` locally on the administrator computer:
 
 ```dotenv
 PGHOST=database-host
@@ -184,7 +184,7 @@ removing data, since it may contain records not uploaded yet.
 ## Run the Local Dashboard
 
 ```powershell
-cd .\services\cloud-api
+cd .\services\local-dashboard
 python .\fastapi_app.py
 ```
 

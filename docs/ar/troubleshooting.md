@@ -117,7 +117,7 @@ Invoke-RestMethod http://127.0.0.1:45632/health
 أنشئ الملف:
 
 ```powershell
-cd .\services\cloud-api
+cd .\services\local-dashboard
 Copy-Item .\.env.example .\.env
 ```
 

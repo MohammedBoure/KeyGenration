@@ -1,32 +1,16 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-use keygen_common::{GenerationToken, RuntimeEnvironment, TOKEN_IDS_VARIABLE, env_assignment};
-use serde::{Deserialize, Serialize};
-use serde_json::json;
+mod api;
+mod installer;
+
+use api::{configured_token_names, generate_key, local_service_ready, validate_request_code};
+use installer::{
+    bundled_service_path, install_service, uninstall_service, verify_install_authorization,
+};
 use std::env;
-use std::fs;
-use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
-const DEFAULT_LOCAL_LISTEN_ADDRESS: &str = "127.0.0.1:45632";
 const SERVICE_NAME: &str = "KeyGenService";
-const REQUIRED_BACKEND_MODE: &str = "local-queue-v1";
-const SERVICE_ENV_OPTIONS: [&str; 12] = [
-    "PGHOST",
-    "PGPORT",
-    "PGDATABASE",
-    "PGUSER",
-    "PGPASSWORD",
-    "PGSSLMODE",
-    "PGCONNECT_TIMEOUT",
-    "KEYGEN_LISTEN_ADDRESS",
-    "KEYGEN_DATA_DIR",
-    "KEYGEN_PRIMARY_LOG",
-    "KEYGEN_STATUS_INTERVAL_SECONDS",
-    "KEYGEN_UPLOAD_INTERVAL_SECONDS",
-];
 
 type AppResult<T> = Result<T, String>;
 
@@ -37,155 +21,6 @@ enum LaunchMode {
     Uninstall,
     Help,
     Invalid(String),
-}
-
-#[derive(Deserialize)]
-struct GenerateResponse {
-    activation_key: String,
-}
-
-#[derive(Deserialize)]
-struct HealthResponse {
-    backend_mode: Option<String>,
-    token_names: Option<Vec<String>>,
-}
-
-#[derive(Serialize)]
-struct GenerateRequest<'a> {
-    request_code: &'a str,
-    app_type: &'a str,
-}
-
-fn configured_local_generate_url() -> AppResult<String> {
-    configured_local_endpoint_url("generate_key")
-}
-
-fn configured_local_health_url() -> AppResult<String> {
-    configured_local_endpoint_url("health")
-}
-
-fn configured_local_endpoint_url(endpoint: &str) -> AppResult<String> {
-    let listen_address = configured_value("KEYGEN_LISTEN_ADDRESS")
-        .unwrap_or_else(|| DEFAULT_LOCAL_LISTEN_ADDRESS.to_owned());
-    local_endpoint_url(&listen_address, endpoint)
-}
-
-fn local_endpoint_url(listen_address: &str, endpoint: &str) -> AppResult<String> {
-    let address: SocketAddr = listen_address
-        .trim()
-        .parse()
-        .map_err(|_| "KEYGEN_LISTEN_ADDRESS doit etre une adresse locale valide.".to_owned())?;
-    Ok(format!("http://{address}/{endpoint}"))
-}
-
-fn configured_value(name: &str) -> Option<String> {
-    RuntimeEnvironment::load()
-        .ok()
-        .and_then(|environment| environment.value(name))
-}
-
-fn runtime_environment() -> AppResult<RuntimeEnvironment> {
-    RuntimeEnvironment::load()
-        .map_err(|error| format!("Lecture du fichier .env impossible: {error}"))
-}
-
-fn configured_generation_tokens() -> AppResult<Vec<GenerationToken>> {
-    runtime_environment()?
-        .generation_tokens()
-        .map_err(|error| format!("Configuration des tokens invalide: {error}"))
-}
-
-fn configured_token_names() -> AppResult<Vec<String>> {
-    Ok(configured_generation_tokens()?
-        .into_iter()
-        .map(|token| token.name)
-        .collect())
-}
-
-fn validate_request_code(value: &str) -> AppResult<String> {
-    let request_code = value.trim().to_ascii_uppercase();
-    if request_code.len() == 14
-        && request_code.as_bytes()[4] == b'-'
-        && request_code.as_bytes()[9] == b'-'
-    {
-        Ok(request_code)
-    } else {
-        Err("Format du code: XXXX-XXXX-XXXX.".to_owned())
-    }
-}
-
-fn local_service_ready() -> AppResult<()> {
-    let expected_token_names = configured_token_names()?;
-    let response = ureq::get(&configured_local_health_url()?)
-        .timeout(Duration::from_secs(2))
-        .call()
-        .map_err(|error| format!("Service local indisponible: {error}"))?;
-    let health: HealthResponse = response
-        .into_json()
-        .map_err(|error| format!("Reponse du service local invalide: {error}"))?;
-    if health.backend_mode.as_deref() != Some(REQUIRED_BACKEND_MODE) {
-        return Err("Service local obsolete; mise a jour requise.".to_owned());
-    }
-    match health.token_names {
-        Some(names) if names == expected_token_names => Ok(()),
-        _ => Err("Configuration des tokens modifiee; mise a jour du service requise.".to_owned()),
-    }
-}
-
-fn generate_key(request_code: &str, app_type: &str) -> AppResult<String> {
-    let local_generate_url = configured_local_generate_url()?;
-    let payload = GenerateRequest {
-        request_code,
-        app_type,
-    };
-    let response = ureq::post(&local_generate_url)
-        .set("Content-Type", "application/json")
-        .timeout(Duration::from_secs(10))
-        .send_json(json!(payload))
-        .map_err(|error| format!("Service local indisponible: {error}"))?;
-    let response: GenerateResponse = response
-        .into_json()
-        .map_err(|error| format!("Reponse locale invalide: {error}"))?;
-    Ok(response.activation_key)
-}
-
-fn bundle_root() -> AppResult<PathBuf> {
-    if let Some(path) = env::var_os("ACTIVATEUR_BUNDLE_DIR") {
-        return Ok(PathBuf::from(path));
-    }
-    let executable = env::current_exe()
-        .map_err(|error| format!("Impossible de localiser l'application: {error}"))?;
-    executable
-        .parent()
-        .map(Path::to_path_buf)
-        .ok_or_else(|| "Dossier de l'application introuvable.".to_owned())
-}
-
-fn install_root() -> AppResult<PathBuf> {
-    env::var_os("ProgramFiles")
-        .map(PathBuf::from)
-        .map(|path| path.join("KeyGenRMS"))
-        .ok_or_else(|| "Variable ProgramFiles introuvable.".to_owned())
-}
-
-fn run_command(program: &Path, arguments: &[&str]) -> AppResult<()> {
-    let output = Command::new(program)
-        .args(arguments)
-        .output()
-        .map_err(|error| format!("Echec de lancement de {}: {error}", program.display()))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let details = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-    Err(format!(
-        "Commande echouee ({}): {}",
-        program.display(),
-        details
-    ))
-}
-
-fn run_optional(program: &Path, arguments: &[&str]) {
-    let _ = Command::new(program).args(arguments).output();
 }
 
 fn launch_mode<I, S>(arguments: I) -> LaunchMode
@@ -204,123 +39,6 @@ where
         [argument] if argument == "--help" || argument == "-h" => LaunchMode::Help,
         _ => LaunchMode::Invalid(arguments.join(" ")),
     }
-}
-
-fn bundled_service_path() -> AppResult<PathBuf> {
-    let service = bundle_root()?
-        .join("KeyGenService")
-        .join("KeyGenService.exe");
-    if !service.is_file() {
-        return Err(format!("Backend Rust manquant: {}", service.display()));
-    }
-    Ok(service)
-}
-
-fn bundled_nssm_path() -> AppResult<PathBuf> {
-    let nssm = bundle_root()?.join("nssm").join("nssm.exe");
-    if !nssm.is_file() {
-        return Err(format!("NSSM manquant: {}", nssm.display()));
-    }
-    Ok(nssm)
-}
-
-fn verify_install_authorization(service: &Path) -> AppResult<()> {
-    let environment = runtime_environment()?;
-    let mut command = Command::new(service);
-    command.arg("--authorize-install");
-    if environment.exists() {
-        command.env("KEYGEN_ENV_FILE", environment.path());
-    }
-    let output = command
-        .output()
-        .map_err(|error| format!("Verification PostgreSQL impossible: {error}"))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let details = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-    if details.is_empty() {
-        Err("Installation interdite ou connexion PostgreSQL indisponible.".to_owned())
-    } else {
-        Err(details)
-    }
-}
-
-fn service_environment_contents() -> AppResult<String> {
-    let source_environment = runtime_environment()?;
-    let tokens = source_environment
-        .generation_tokens()
-        .map_err(|error| format!("Configuration des tokens invalide: {error}"))?;
-    let mut contents =
-        "# Generated local service settings for PostgreSQL synchronization.\n".to_owned();
-    for name in SERVICE_ENV_OPTIONS {
-        if let Some(value) = source_environment.value(name) {
-            contents.push_str(&env_assignment(name, &value));
-        }
-    }
-    let token_ids = tokens
-        .iter()
-        .map(|token| token.id.as_str())
-        .collect::<Vec<_>>()
-        .join(",");
-    contents.push_str(&env_assignment(TOKEN_IDS_VARIABLE, &token_ids));
-    for token in tokens {
-        contents.push_str(&env_assignment(&token.name_variable(), &token.name));
-        contents.push_str(&env_assignment(&token.secret_variable(), &token.secret));
-    }
-    Ok(contents)
-}
-
-fn install_service() -> AppResult<String> {
-    let source_service = bundled_service_path()?;
-    let source_nssm = bundled_nssm_path()?;
-    verify_install_authorization(&source_service)?;
-
-    let destination = install_root()?;
-    fs::create_dir_all(&destination)
-        .map_err(|error| format!("Creation du dossier impossible: {error}"))?;
-    let installed_service = destination.join("KeyGenService.exe");
-    let installed_nssm = destination.join("nssm.exe");
-
-    // Windows keeps a running executable locked; stop an existing instance before upgrading it.
-    run_optional(&source_nssm, &["stop", SERVICE_NAME, "confirm"]);
-    run_optional(&source_nssm, &["remove", SERVICE_NAME, "confirm"]);
-    fs::copy(&source_service, &installed_service)
-        .map_err(|error| format!("Copie de KeyGenService impossible: {error}"))?;
-    fs::copy(&source_nssm, &installed_nssm)
-        .map_err(|error| format!("Copie de NSSM impossible: {error}"))?;
-    fs::write(destination.join(".env"), service_environment_contents()?)
-        .map_err(|error| format!("Ecriture du fichier .env du service impossible: {error}"))?;
-
-    let service_path = installed_service.to_string_lossy().to_string();
-    let app_directory = destination.to_string_lossy().to_string();
-
-    run_command(&installed_nssm, &["install", SERVICE_NAME, &service_path])?;
-    run_command(
-        &installed_nssm,
-        &["set", SERVICE_NAME, "AppDirectory", &app_directory],
-    )?;
-    run_command(
-        &installed_nssm,
-        &["set", SERVICE_NAME, "Start", "SERVICE_AUTO_START"],
-    )?;
-    run_command(&installed_nssm, &["set", SERVICE_NAME, "AppNoConsole", "1"])?;
-    run_command(&installed_nssm, &["start", SERVICE_NAME])?;
-
-    Ok("Service Rust installe et demarre.".to_owned())
-}
-
-fn uninstall_service() -> AppResult<String> {
-    let source_nssm = bundled_nssm_path()?;
-    run_optional(&source_nssm, &["stop", SERVICE_NAME, "confirm"]);
-    run_optional(&source_nssm, &["remove", SERVICE_NAME, "confirm"]);
-    std::thread::sleep(Duration::from_millis(500));
-
-    let destination = install_root()?;
-    if destination.exists() {
-        fs::remove_dir_all(&destination)
-            .map_err(|error| format!("Suppression du backend local impossible: {error}"))?;
-    }
-    Ok("Service backend local supprime. Les donnees locales sont conservees.".to_owned())
 }
 
 #[cfg(windows)]
@@ -962,14 +680,14 @@ mod tests {
     #[test]
     fn builds_local_endpoint_urls_from_service_listener() {
         assert_eq!(
-            local_endpoint_url("127.0.0.1:45639", "generate_key"),
+            api::local_endpoint_url("127.0.0.1:45639", "generate_key"),
             Ok("http://127.0.0.1:45639/generate_key".to_owned())
         );
         assert_eq!(
-            local_endpoint_url("127.0.0.1:45639", "health"),
+            api::local_endpoint_url("127.0.0.1:45639", "health"),
             Ok("http://127.0.0.1:45639/health".to_owned())
         );
-        assert!(local_endpoint_url("not-a-socket", "health").is_err());
+        assert!(api::local_endpoint_url("not-a-socket", "health").is_err());
     }
 
     #[test]
