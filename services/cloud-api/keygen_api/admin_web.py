@@ -5,7 +5,7 @@ from ipaddress import ip_address
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Path as PathParameter, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -125,5 +125,25 @@ def create_admin_app(initialize_database=True):
 
         records = [dict(row) for row in rows]
         return {"records": records, "count": len(records)}
+
+    @application.delete("/api/activation-logs/{log_id}")
+    def delete_activation_log(log_id: int = PathParameter(..., ge=1)):
+        try:
+            with db.db_cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM activation_logs WHERE id = %s RETURNING id",
+                    (log_id,),
+                )
+                deleted = cursor.fetchone()
+        except Exception as error:
+            _database_error("activation log delete", error)
+
+        if not deleted:
+            raise HTTPException(
+                status_code=404,
+                detail="لم يتم العثور على سجل المفتاح المطلوب حذفه.",
+            )
+
+        return {"deleted": True, "id": log_id}
 
     return application

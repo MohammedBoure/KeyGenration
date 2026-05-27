@@ -22,6 +22,10 @@ class AdminWebTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("لوحة متابعة".encode("utf-8"), response.content)
+        delete_function = response.text.split("async function deleteRecord", 1)[1].split(
+            "document.getElementById", 1
+        )[0]
+        self.assertEqual(delete_function.count("window.confirm("), 2)
 
     def test_dashboard_rejects_non_local_requests_by_default(self):
         remote_client = TestClient(
@@ -100,6 +104,45 @@ class AdminWebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["count"], 1)
         self.assertEqual(response.json()["records"][0]["id"], 4)
+
+    def test_activation_record_can_be_deleted_by_id(self):
+        statements = []
+
+        class Cursor:
+            def execute(self, query, parameters=None):
+                statements.append((query, parameters))
+
+            def fetchone(self):
+                return (4,)
+
+        @contextmanager
+        def cursor_context(_dict_rows=False):
+            yield Cursor()
+
+        with patch("keygen_api.admin_web.db.db_cursor", cursor_context):
+            response = self.client.delete("/api/activation-logs/4")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"deleted": True, "id": 4})
+        self.assertIn("DELETE FROM activation_logs", statements[0][0])
+        self.assertEqual(statements[0][1], (4,))
+
+    def test_deleting_missing_activation_record_returns_not_found(self):
+        class Cursor:
+            def execute(self, _query, _parameters=None):
+                pass
+
+            def fetchone(self):
+                return None
+
+        @contextmanager
+        def cursor_context(_dict_rows=False):
+            yield Cursor()
+
+        with patch("keygen_api.admin_web.db.db_cursor", cursor_context):
+            response = self.client.delete("/api/activation-logs/77")
+
+        self.assertEqual(response.status_code, 404)
 
 
 if __name__ == "__main__":

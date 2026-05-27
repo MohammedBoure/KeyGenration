@@ -21,5 +21,7 @@ python .\fastapi_app.py
 
 Open `http://127.0.0.1:8080/`.
 
-The dashboard reads `activation_logs` and updates `server_control.status`.
+The dashboard reads `activation_logs`, deletes an individual record after two
+browser confirmations, and updates `server_control.status`. Its PostgreSQL
+account therefore needs `DELETE` on `activation_logs` when deletion is used.
 It binds locally and rejects non-local requests by default.

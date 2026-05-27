@@ -192,6 +192,10 @@ http://127.0.0.1:8080
 | `/api/status` | `GET` | `{"status":"1"}` أو `{"status":"0"}` |
 | `/api/status` | `PUT {"status":"0"}` | تغيير حالة التحكم |
 | `/api/activation-logs?limit=100` | `GET` | أحدث سجلات PostgreSQL |
+| `/api/activation-logs/{id}` | `DELETE` | حذف سجل مفتاح واحد من PostgreSQL |
 
 قيمة `limit` من `1` إلى `500`. ترفض اللوحة الاتصالات غير المحلية افتراضيا
 ما لم يضبط `ADMIN_WEB_ALLOW_REMOTE=1`، وهو إعداد لا ينصح به دون حماية إضافية.
+
+تستدعي الصفحة طلب `DELETE` فقط بعد تأكيدين متتاليين في المتصفح. يحتاج حساب
+قاعدة بيانات لوحة الإدارة صلاحية `DELETE` على جدول `activation_logs`.
