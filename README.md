@@ -1,66 +1,111 @@
 # KeyGenRestorant / Activateur RMS
 
-برنامج Windows خفيف لإنتاج مفاتيح تفعيل لمنتجات معرفة في ملف `.env` الخاص
-بالتشغيل، مع تسجيل العمليات في PostgreSQL والتحكم في إيقاف المولد عن بعد.
-الواجهة والخدمة الخلفية مكتوبتان بـ Rust، أما موقع الإدارة فهو تطبيق FastAPI
-محلي على جهاز المدير.
+Lightweight Windows activation-key generator for products configured through a
+private `.env` file. It records generation activity in PostgreSQL and lets an
+administrator enable or disable generation remotely.
 
-## الصورة العامة
+The user interface and the permanent local backend are written in Rust. The
+administration website is a local FastAPI application used on the
+administrator's computer.
+
+Documentation language: **English (primary)** | [Arabic documentation](docs/ar/README.md)
+
+## Architecture
 
 ```text
-جهاز المولد
-  ActivateurRMS.exe (واجهة Rust)
+Generator computer
+  ActivateurRMS.exe (Rust UI)
        |
-       | HTTP محلي فقط: 127.0.0.1:45632
+       | Local HTTP only: 127.0.0.1:45632
        v
-  KeyGenService.exe (خدمة Rust مثبتة عبر NSSM)
+  KeyGenService.exe (Rust Windows service installed through NSSM)
        |
-       | PostgreSQL + SSL
+       | PostgreSQL over SSL
        v
-  قاعدة PostgreSQL البعيدة
+  Remote PostgreSQL database
        ^
-       | PostgreSQL + SSL
+       | PostgreSQL over SSL
        |
-جهاز الإدارة
-  FastAPI المحلي: http://127.0.0.1:8080/
+Administration computer
+  Local FastAPI dashboard: http://127.0.0.1:8080/
 ```
 
-لا توجد Cloud API عامة بين المولد وقاعدة البيانات. خدمة Rust تتصل مباشرة
-بـ PostgreSQL لقراءة حالة السماح ورفع السجلات، ولوحة FastAPI تتصل مباشرة
-بنفس القاعدة لعرض البيانات وتعديل الحالة.
+There is no public cloud HTTP API between the generator and the database.
+`KeyGenService.exe` connects directly to PostgreSQL to read the control status
+and upload records. The FastAPI dashboard connects directly to the same
+database to view records, delete an individual record when needed, and change
+the control status.
 
-## المكونات
+## Components
 
-| المكون | الوظيفة |
+| Component | Purpose |
 | --- | --- |
-| `ActivateurRMS.exe` | واجهة المولد، وفحص/تثبيت/تحديث/حذف خدمة Windows |
-| `KeyGenService.exe` | توليد المفتاح محليا، حفظ الطابور، المزامنة، وتنفيذ حالة الإيقاف |
-| `nssm.exe` | تشغيل خدمة Rust تلقائيا كخدمة Windows باسم `KeyGenService` |
-| PostgreSQL | تخزين `server_control.status` وسجلات `activation_logs` |
-| FastAPI المحلي | موقع الإدارة المحلي لعرض السجلات وحذف سجل عند الحاجة وتغيير `0/1` |
+| `ActivateurRMS.exe` | Native UI and Windows-service installation, update, repair, and removal |
+| `KeyGenService.exe` | Local key generation, queue storage, PostgreSQL synchronization, and maintenance control |
+| `nssm.exe` | Runs `KeyGenService` automatically as a Windows service |
+| PostgreSQL | Stores `server_control.status` and `activation_logs` |
+| Local FastAPI dashboard | Displays logs, deletes a selected log after two confirmations, and edits status `0/1` |
 
-## مسار التشغيل
+## Runtime Flow
 
-1. تشغل الواجهة وتفحص خدمة Windows المسجلة باسم `KeyGenService`.
-2. إن كانت الخدمة تعمل وتجيب بصيغة backend الصحيحة وبنفس قائمة tokens
-   المعرفة في `.env`، تظهر الواجهة جاهزة.
-3. إن كانت الخدمة متوقفة، تحاول الواجهة بدءها.
-4. إن لم تكن مثبتة، أو كانت قديمة/مكسورة، تفحص الواجهة اتصال PostgreSQL
-   وتشترط أن تكون قيمة `server_control.status` مساوية لـ `1`.
-5. بعد نجاح الفحص تطلب صلاحية Administrator، وتثبت أو تصلح الخدمة عبر NSSM.
-6. في أول تشغيل للخدمة، تعيد الخدمة قراءة الحالة `1` ثم تكتب
+1. The UI checks whether the Windows service named `KeyGenService` is registered.
+2. A healthy service is accepted only when its backend contract and configured
+   token-name list match the UI's local `.env`.
+3. If an installed service is stopped, the UI attempts to start it.
+4. If it is missing, obsolete, or broken, installation is allowed only when
+   PostgreSQL is reachable and `server_control.status` is `1`.
+5. After authorization, the UI requests Administrator permission and installs
+   or repairs the service through NSSM.
+6. On its first normal start, the service confirms status `1` and creates
    `%ProgramData%\KeyGenRMS\AUTHORIZED.txt`.
-7. تبني الواجهة قائمة البرامج من أسماء tokens في `.env`. عند التوليد، تنشئ
-   الخدمة المفتاح محليا باستخدام السر المقابل وتحفظ السجل في طابور محلي، ثم
-   ترفعه إلى PostgreSQL عند توفر الاتصال.
-8. تقرأ الخدمة حالة `0/1` دوريا. وصول `0` ينشئ `MAINTENANCE.txt` ويمنع
-   توليد مفاتيح جديدة، ووصول `1` يعيد التمكين.
+7. The UI displays the product names loaded from `.env`; the service generates
+   a key locally using the selected private token, stores the operation
+   locally, and uploads it when connectivity is available.
+8. The service polls status `0/1`. Status `0` creates `MAINTENANCE.txt` and
+   blocks new generation; status `1` enables generation again.
 
-## التشغيل السريع
+## Private Configuration
 
-### مولد Windows
+Put a configured `.env` beside `ActivateurRMS.exe` on a managed generator
+computer only. It contains PostgreSQL credentials and all generation tokens:
 
-الحزمة المجمعة تكون بالشكل التالي:
+```dotenv
+PGHOST=replace-with-postgresql-host
+PGPORT=replace-with-postgresql-port
+PGDATABASE=replace-with-postgresql-database
+PGUSER=replace-with-restricted-client-user
+PGPASSWORD=replace-with-restricted-client-password
+PGSSLMODE=require
+PGCONNECT_TIMEOUT=10
+
+KEYGEN_LISTEN_ADDRESS=127.0.0.1:45632
+KEYGEN_STATUS_INTERVAL_SECONDS=15
+KEYGEN_UPLOAD_INTERVAL_SECONDS=5
+
+KEYGEN_TOKEN_IDS=restaurant,lab,jewelry
+KEYGEN_TOKEN_RESTAURANT_NAME=Restaurant
+KEYGEN_TOKEN_RESTAURANT_SECRET=replace-with-private-restaurant-token
+KEYGEN_TOKEN_LAB_NAME=Lab
+KEYGEN_TOKEN_LAB_SECRET=replace-with-private-lab-token
+KEYGEN_TOKEN_JEWELRY_NAME=Jewelry
+KEYGEN_TOKEN_JEWELRY_SECRET=replace-with-private-jewelry-token
+```
+
+To add a product, add an identifier to `KEYGEN_TOKEN_IDS`, define its
+`KEYGEN_TOKEN_<ID>_NAME` and `KEYGEN_TOKEN_<ID>_SECRET`, then run:
+
+```powershell
+.\ActivateurRMS.exe --install
+```
+
+The executable files do not embed PostgreSQL connection details or private
+generation tokens.
+
+## Quick Start
+
+### Windows Generator
+
+The generated package has this layout:
 
 ```text
 ActivateurRMS\
@@ -70,8 +115,8 @@ ActivateurRMS\
 `-- SHA256SUMS.txt
 ```
 
-على جهاز التشغيل الذي تديره فقط، ضع ملف `.env` مهيأ بجانب
-`ActivateurRMS.exe`، ثم ثبت الخدمة:
+On the managed generator computer, place the private `.env` beside the UI and
+install the local service:
 
 ```powershell
 cd .\dist\windows\ActivateurRMS
@@ -79,90 +124,91 @@ cd .\dist\windows\ActivateurRMS
 .\ActivateurRMS.exe
 ```
 
-سيظهر طلب UAC عند حاجة البرنامج إلى صلاحية تثبيت خدمة Windows.
+Windows displays a UAC prompt when administrator permission is needed.
 
-### موقع الإدارة المحلي
+### Local Administration Dashboard
 
 ```powershell
 cd .\services\cloud-api
 python -m pip install -r .\requirements.txt
 Copy-Item .\.env.example .\.env
-# حرر .env ببيانات PostgreSQL الإدارية.
+# Edit .env with the dashboard PostgreSQL account.
 python .\app.py --init-db-only
 python .\fastapi_app.py
 ```
 
-ثم افتح `http://127.0.0.1:8080/`.
+Open `http://127.0.0.1:8080/` on the same computer.
 
-## أوامر الخدمة
+## Service Commands
 
-يجب تنفيذ الأوامر من مجلد الحزمة الذي يحتوي `KeyGenService\` و`nssm\`:
+Run these from the package folder containing `KeyGenService\` and `nssm\`:
 
-| الأمر | النتيجة |
+| Command | Result |
 | --- | --- |
-| `.\ActivateurRMS.exe --install` | تثبيت الخدمة أو تحديثها أو إصلاح تسجيل مكسور |
-| `.\ActivateurRMS.exe --uninstall` | إيقاف وحذف خدمة backend وملفات التثبيت |
-| `.\ActivateurRMS.exe --unstall` | اسم بديل مقبول لأمر الإزالة |
-| `.\ActivateurRMS.exe --help` | عرض الأوامر |
+| `.\ActivateurRMS.exe --install` | Installs, updates, or repairs the local backend service |
+| `.\ActivateurRMS.exe --uninstall` | Stops and removes the backend service and installation files |
+| `.\ActivateurRMS.exe --unstall` | Accepted alias for `--uninstall` |
+| `.\ActivateurRMS.exe --help` | Displays command help |
 
-`--uninstall` يحذف `%ProgramFiles%\KeyGenRMS`، لكنه يبقي
-`%ProgramData%\KeyGenRMS` حتى لا تضيع مفاتيح أو سجلات غير مرفوعة.
+Uninstall removes `%ProgramFiles%\KeyGenRMS` but preserves
+`%ProgramData%\KeyGenRMS` so unsynchronized records are not lost.
 
-## ملفات التشغيل
+## Local Data
 
-| المكان | المحتوى |
+| Location | Contents |
 | --- | --- |
-| بجانب `ActivateurRMS.exe` | ملف `.env` الأولي على جهاز التشغيل |
-| `%ProgramFiles%\KeyGenRMS` | الخدمة المثبتة وNSSM ونسخة إعداد الخدمة |
-| `%ProgramData%\KeyGenRMS` | سجل المفاتيح والطابور وحالة التفويض/الإيقاف |
-| `services\cloud-api\.env` | إعداد لوحة FastAPI المحلية على جهاز الإدارة |
+| Beside `ActivateurRMS.exe` | Initial private `.env` on the managed computer |
+| `%ProgramFiles%\KeyGenRMS` | Installed service, NSSM, and service `.env` copy |
+| `%ProgramData%\KeyGenRMS` | Generated-key logs, pending queue, authorization, and maintenance state |
+| `services\cloud-api\.env` | Local dashboard configuration on the administration computer |
 
-ملفات البيانات المحلية الأساسية:
-
-| الملف | المعنى |
+| Data file | Purpose |
 | --- | --- |
-| `generated_keys.txt` | السجل المحلي للمفاتيح المولدة |
-| `pending_uploads.json` | سجلات تنتظر الرفع إلى PostgreSQL |
-| `uploaded.log` | سجلات رفعت بنجاح |
-| `AUTHORIZED.txt` | تفويض التشغيل الأول بعد استلام الحالة `1` |
-| `MAINTENANCE.txt` | إيقاف محلي بعد استلام الحالة `0` |
+| `generated_keys.txt` | Local generated-key log |
+| `pending_uploads.json` | Records waiting for upload to PostgreSQL |
+| `uploaded.log` | Successfully uploaded record trace |
+| `AUTHORIZED.txt` | Initial authorization marker after receiving status `1` |
+| `MAINTENANCE.txt` | Local disabled state after receiving status `0` |
 
-## البناء
+## Build
 
 ```powershell
 Copy-Item .\packaging\windows\client.env.example .\packaging\windows\.env
-# ضع إعداد التشغيل المحلي والأسرار في .env فقط، ولا تضفه إلى git.
+# Configure the private local .env; never add it to git.
 cargo fmt --all
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 .\packaging\windows\package.cmd
 ```
 
-الناتج الافتراضي هو `dist\windows\ActivateurRMS\`. سكربت التغليف لا يضمن
-تفاصيل اتصال PostgreSQL أو أسرار `KEYGEN_TOKEN_*_SECRET` في ملفات `exe`،
-ويحذف أي `.env` قديم من مجلد الناتج. يوضع `.env` الحقيقي لاحقا على جهاز
-التشغيل فقط.
+The default output is `dist\windows\ActivateurRMS\`. Packaging removes any
+old `.env` from the output directory; put the real `.env` on the managed
+computer after packaging.
 
-## الأمان والحدود
+## Security Limits
 
-- استخدم حساب PostgreSQL محدودا للمولد: قراءة `server_control` وإدخال
-  `activation_logs` فقط.
-- لا توزع ملف `.env` الذي يحتوي كلمة المرور أو أسرار توليد المفاتيح.
-- لأن المولد يعمل دون إنترنت، خوارزمية التوليد موجودة على جهاز المولد.
-- إذا انقطع الجهاز قبل استلام الحالة `0`، فلن يعرف الإيقاف الجديد حتى
-  يتصل مرة أخرى. هذا حد ضروري للعمل offline.
-- موقع FastAPI محلي افتراضيا ولا ينبغي نشره للإنترنت دون مصادقة وحماية.
+- Use a restricted PostgreSQL account for generator computers: `SELECT` on
+  `server_control` and `INSERT` on `activation_logs` only.
+- Never distribute or commit `.env` files containing credentials or tokens.
+- Offline generation requires a token to exist locally in the installed
+  service configuration; a computer administrator can therefore extract it.
+- A disconnected generator cannot receive a new status `0` until it reconnects.
+- The FastAPI dashboard is local-only by default and must not be exposed
+  publicly without additional authentication and transport protection.
+- Any older secrets that existed in git history must be rotated before the
+  repository is made public.
 
-## التوثيق التفصيلي
+## Documentation
 
-| الدليل | المحتوى |
+| Guide | Contents |
 | --- | --- |
-| [فهرس التوثيق](docs/README.md) | نقطة البداية لكل الأدلة |
-| [المعمارية وتدفق البيانات](docs/ar/architecture.md) | الحدود بين الواجهة والخدمة والقاعدة والموقع |
-| [دليل الاستخدام](docs/ar/usage.md) | تشغيل المولد والأوامر والملفات المحلية |
-| [البناء والنشر](docs/ar/deployment.md) | PostgreSQL والتجميع والتثبيت والتحقق |
-| [إعداد tokens السرية](docs/ar/tokens.md) | إضافة المنتجات وتدوير أسرار التوليد عبر `.env` |
-| [لوحة FastAPI المحلية](docs/ar/local-dashboard.md) | تشغيل الموقع ومساراته والتحكم |
-| [استكشاف الأخطاء](docs/ar/troubleshooting.md) | مشاكل الخدمة والمزامنة والاتصال |
-| [الأمان وحدود التحكم](docs/ar/security.md) | الأسرار والصلاحيات والعمل دون إنترنت |
-| [مرجع الواجهات والتخزين](docs/api.md) | HTTP وSQL والإعدادات للمطور |
+| [Documentation index](docs/README.md) | Starting point for English documentation |
+| [Architecture and data flow](docs/en/architecture.md) | Component boundaries and runtime flows |
+| [User guide](docs/en/usage.md) | Daily operation, installation, and local files |
+| [Deployment](docs/en/deployment.md) | PostgreSQL, configuration, build, and verification |
+| [Private tokens](docs/en/tokens.md) | Product addition and secret rotation through `.env` |
+| [Local dashboard](docs/en/local-dashboard.md) | Browser UI, status control, and log deletion |
+| [Troubleshooting](docs/en/troubleshooting.md) | Service, connection, and synchronization failures |
+| [Security](docs/en/security.md) | Secrets, permissions, and offline limitations |
+| [API and storage reference](docs/api.md) | HTTP, SQL, and configuration contract |
+| [Arabic documentation](docs/ar/README.md) | Complete Arabic documentation index |

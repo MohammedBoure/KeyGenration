@@ -1,48 +1,56 @@
-# توثيق Activateur RMS
+# Activateur RMS Documentation
 
-هذا المجلد هو المرجع التشغيلي والتقني للنسخة الحالية. التصميم الحالي لا
-يستخدم Cloud API عامة: توجد خدمة Rust محلية دائمة على جهاز المولد، ولوحة
-FastAPI محلية منفصلة على جهاز الإدارة، وكلتاهما تتصلان بقاعدة PostgreSQL.
+English is the primary documentation language for the current version.
+Complete Arabic documentation is also maintained in [ar/README.md](ar/README.md).
 
-## ابدأ من هنا
+The deployed design has no public cloud API for the Windows generator. A
+permanent local Rust service runs on each generator computer, a separate
+FastAPI dashboard is used locally by an administrator, and both communicate
+with PostgreSQL directly.
 
-| احتياجك | الدليل |
+## Start Here
+
+| Need | Guide |
 | --- | --- |
-| فهم كيف تتصل الأجزاء ببعضها | [المعمارية وتدفق البيانات](ar/architecture.md) |
-| تشغيل المولد اليومي أو إدارة خدمته | [دليل الاستخدام](ar/usage.md) |
-| إنشاء قاعدة البيانات وبناء/توزيع الحزمة | [البناء والنشر](ar/deployment.md) |
-| تعريف المنتجات وأسرار التوليد في `.env` | [إعداد tokens السرية](ar/tokens.md) |
-| تشغيل موقع الإدارة المحلي وتغيير الحالة | [لوحة FastAPI المحلية](ar/local-dashboard.md) |
-| معالجة رسالة خطأ أو طابور لا يفرغ | [استكشاف الأخطاء](ar/troubleshooting.md) |
-| فهم مخاطر `.env` والعمل offline | [الأمان وحدود التحكم](ar/security.md) |
-| تطوير التكامل HTTP/SQL | [مرجع الواجهات والتخزين](api.md) |
+| Understand components and data flow | [Architecture and data flow](en/architecture.md) |
+| Operate a generator computer | [User guide](en/usage.md) |
+| Build, configure, and deploy | [Deployment guide](en/deployment.md) |
+| Add products and manage private tokens | [Private token configuration](en/tokens.md) |
+| Run the website and control status/logs | [Local FastAPI dashboard](en/local-dashboard.md) |
+| Diagnose failures | [Troubleshooting](en/troubleshooting.md) |
+| Understand secret handling and limits | [Security and control limits](en/security.md) |
+| Integrate with HTTP or PostgreSQL | [API and storage reference](api.md) |
 
-## خريطة سريعة
+## Quick Map
 
 ```text
 ActivateurRMS.exe  -->  KeyGenService.exe/NSSM  -->  PostgreSQL
                                ^
-                               | لا اتصال HTTP خارجي
+                               | loopback HTTP only
 
-FastAPI محلي على جهاز الإدارة  ----------------->  PostgreSQL
+Local FastAPI dashboard on admin computer --------> PostgreSQL
 ```
 
-## الكلمات المستخدمة
+## Terminology
 
-| الاسم | المقصود |
+| Term | Meaning |
 | --- | --- |
-| الواجهة | `ActivateurRMS.exe` الذي يستخدمه مولد المفاتيح |
-| backend المحلي | `KeyGenService.exe` المثبت كخدمة Windows عبر NSSM |
-| الموقع المحلي | تطبيق FastAPI المستخدم للمتابعة والتحكم من المتصفح |
-| الخادم البعيد | قاعدة PostgreSQL فقط، وليس API لتوليد المفاتيح |
-| الحالة | قيمة `server_control.status`: إما `1` أو `0` |
+| UI | `ActivateurRMS.exe`, used by the person generating keys |
+| Local backend | `KeyGenService.exe`, installed as a Windows service through NSSM |
+| Dashboard | Local FastAPI website for monitoring and control |
+| Remote server | PostgreSQL storage only, not a key-generation API |
+| Status | `server_control.status`, either `1` to enable or `0` to disable new generation |
+| Token | Private per-product secret read from `.env` and used for local key derivation |
 
-## مواقع الملفات المهمة
+## Source Layout
 
-| المسار | الاستخدام |
+| Path | Purpose |
 | --- | --- |
-| `apps\desktop` | مصدر واجهة Rust وأوامر تثبيت الخدمة |
-| `apps\keygen-service` | مصدر backend Rust المحلي |
-| `services\cloud-api` | اسم تاريخي لمصدر لوحة FastAPI المحلية وتهيئة PostgreSQL |
-| `packaging\windows` | حزمة Windows وNSSM وأداة التغليف |
-| `dist\windows\ActivateurRMS` | ناتج التجميع عند البناء محليا |
+| `apps\desktop` | Rust desktop UI and service administration commands |
+| `apps\keygen-service` | Rust local backend service |
+| `crates\config` | Shared `.env` and token configuration parsing |
+| `services\cloud-api` | Historical folder name for the local FastAPI dashboard and database initializer |
+| `packaging\windows` | Windows bundle and NSSM packaging scripts |
+| `docs\en` | Detailed English operational guides |
+| `docs\ar` | Detailed Arabic operational guides |
+| `dist\windows\ActivateurRMS` | Local build output, ignored by git |

@@ -1,21 +1,22 @@
-# مرجع الواجهات والتخزين
+# API and Storage Reference
 
-هذا مرجع تقني للتكامل بين الواجهة وخدمة Rust وقاعدة PostgreSQL ولوحة
-FastAPI. لا توجد واجهة Cloud HTTP عامة في التصميم الحالي.
+This is the technical contract between the Rust UI, the Rust local backend,
+PostgreSQL storage, and the local FastAPI dashboard. The current design does
+not expose a public cloud HTTP API.
 
-## خدمة Rust المحلية
+## Rust Local Backend
 
-العنوان الافتراضي:
+Default address:
 
 ```text
 http://127.0.0.1:45632
 ```
 
-تستعملها واجهة `ActivateurRMS.exe` فقط على جهاز المولد.
+Only `ActivateurRMS.exe` on the generator computer is intended to use this API.
 
 ### `GET /health`
 
-الاستجابة:
+Example response:
 
 ```json
 {
@@ -28,20 +29,20 @@ http://127.0.0.1:45632
 }
 ```
 
-| الحقل | المعنى |
+| Field | Meaning |
 | --- | --- |
-| `backend_mode` | إصدار عقد backend الذي تتطلبه الواجهة |
-| `token_names` | أسماء خيارات التوليد المحملة من `.env`، وتستخدمها الواجهة لكشف الحاجة إلى تحديث الخدمة |
-| `authorized` | وجود علامة تفويض التشغيل الأول `AUTHORIZED.txt` |
-| `maintenance` | هل التوليد ممنوع محليا بسبب الحالة `0` |
-| `pending_uploads` | عدد السجلات التي لم تنظف من طابور الرفع بعد |
+| `backend_mode` | Backend contract version required by the UI |
+| `token_names` | Product names loaded from `.env`; the UI compares this list with its configuration |
+| `authorized` | Whether `AUTHORIZED.txt` exists after initial authorization |
+| `maintenance` | Whether generation is blocked locally after status `0` |
+| `pending_uploads` | Number of records still present in the upload queue |
 
-تتحقق الواجهة أيضا من أن خدمة Windows `KeyGenService` مسجلة، فلا يكفي تشغيل
-خادم يدوي على المنفذ نفسه.
+The UI also verifies that the `KeyGenService` Windows service is registered. A
+manually launched HTTP listener at the same port is not a supported deployment.
 
 ### `POST /generate_key`
 
-الطلب:
+Request:
 
 ```json
 {
@@ -50,11 +51,11 @@ http://127.0.0.1:45632
 }
 ```
 
-القيم المقبولة لـ `app_type` هي قيم `KEYGEN_TOKEN_<ID>_NAME` المعرفة في
-`.env`. إذا لم يرسل عميل محلي الحقل، تستخدم الخدمة أول token في
-`KEYGEN_TOKEN_IDS`.
+Accepted `app_type` values are the `KEYGEN_TOKEN_<ID>_NAME` values configured
+in `.env`. If an internal client omits `app_type`, the service uses the first
+token listed in `KEYGEN_TOKEN_IDS`.
 
-الاستجابة الناجحة:
+Successful response:
 
 ```json
 {
@@ -65,19 +66,17 @@ http://127.0.0.1:45632
 }
 ```
 
-معنى `generated_and_queued`: المفتاح أنشئ وحفظ محليا، وأضيف سجل إلى طابور
-المزامنة؛ قد يكون الرفع إلى PostgreSQL تم لاحقا.
+`generated_and_queued` means the key has been generated and stored locally and
+a synchronization record has been queued. PostgreSQL upload can occur later.
 
-الأخطاء المهمة:
-
-| HTTP | السبب |
+| HTTP status | Cause |
 | --- | --- |
-| `400` | JSON غير صالح، كود طلب غير صحيح، أو نوع منتج غير معروف |
-| `503` | وضع الصيانة فعال أو فشل حفظ العملية محليا |
+| `400` | Invalid JSON, invalid `XXXX-XXXX-XXXX` request code, or unknown `app_type` |
+| `503` | Maintenance mode is active or local persistence failed |
 
-## أوامر تنفيذية داخلية/إدارية
+## Administrative Executables
 
-### أوامر الواجهة
+### Desktop UI commands
 
 ```powershell
 ActivateurRMS.exe --install
@@ -86,56 +85,59 @@ ActivateurRMS.exe --unstall
 ActivateurRMS.exe --help
 ```
 
-### أمر backend المستخدم أثناء التثبيت
+`--unstall` is maintained as an alias for `--uninstall`.
+
+### Internal backend authorization command
 
 ```powershell
 KeyGenService.exe --authorize-install
 ```
 
-يتصل هذا الأمر بقاعدة البيانات ويخرج بنجاح فقط إذا كان
-`server_control.status='1'`. تستخدمه الواجهة قبل تثبيت أو تحديث الخدمة.
+This command connects to PostgreSQL and succeeds only when
+`server_control.status='1'`. The desktop UI invokes it before installing or
+updating the Windows service.
 
-## إعداد خدمة Rust
+## Rust Service Configuration
 
-| المتغير | مطلوب | القيمة الافتراضية | الوظيفة |
+| Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
-| `PGHOST` | نعم | لا يوجد | مضيف PostgreSQL |
-| `PGPORT` | نعم | لا يوجد | منفذ PostgreSQL |
-| `PGDATABASE` | نعم | لا يوجد | اسم قاعدة البيانات |
-| `PGUSER` | نعم | لا يوجد | حساب المولد المحدود |
-| `PGPASSWORD` | نعم | لا يوجد | كلمة المرور |
-| `KEYGEN_TOKEN_IDS` | نعم | لا يوجد | معرفات tokens مرتبة ومفصولة بفواصل |
-| `KEYGEN_TOKEN_<ID>_NAME` | نعم لكل token | لا يوجد | الاسم الذي تعرضه الواجهة وترسله في `app_type` |
-| `KEYGEN_TOKEN_<ID>_SECRET` | نعم لكل token | لا يوجد | السر الخاص باشتقاق المفتاح |
-| `PGSSLMODE` | لا | `require` | `disable` أو `require` أو `verify-full` |
-| `PGCONNECT_TIMEOUT` | لا | `10` | مهلة الاتصال بالثواني |
-| `KEYGEN_LISTEN_ADDRESS` | لا | `127.0.0.1:45632` | عنوان HTTP المحلي |
-| `KEYGEN_STATUS_INTERVAL_SECONDS` | لا | `15` | دورية قراءة الحالة |
-| `KEYGEN_UPLOAD_INTERVAL_SECONDS` | لا | `5` | دورية محاولة الرفع |
-| `KEYGEN_DATA_DIR` | لا | `%ProgramData%\KeyGenRMS` | مجلد البيانات |
-| `KEYGEN_PRIMARY_LOG` | لا | `generated_keys.txt` داخل مجلد البيانات | سجل المفاتيح الأساسي |
+| `PGHOST` | Yes | None | PostgreSQL host |
+| `PGPORT` | Yes | None | PostgreSQL port |
+| `PGDATABASE` | Yes | None | PostgreSQL database |
+| `PGUSER` | Yes | None | Restricted generator account |
+| `PGPASSWORD` | Yes | None | PostgreSQL password |
+| `KEYGEN_TOKEN_IDS` | Yes | None | Ordered comma-separated token identifiers |
+| `KEYGEN_TOKEN_<ID>_NAME` | Yes per token | None | Name displayed by the UI and sent as `app_type` |
+| `KEYGEN_TOKEN_<ID>_SECRET` | Yes per token | None | Secret used in activation-key derivation |
+| `PGSSLMODE` | No | `require` | `disable`, `require`, or `verify-full` |
+| `PGCONNECT_TIMEOUT` | No | `10` | Database connection timeout in seconds |
+| `KEYGEN_LISTEN_ADDRESS` | No | `127.0.0.1:45632` | Local HTTP listening address |
+| `KEYGEN_STATUS_INTERVAL_SECONDS` | No | `15` | Remote status poll interval |
+| `KEYGEN_UPLOAD_INTERVAL_SECONDS` | No | `5` | Pending-record upload interval |
+| `KEYGEN_DATA_DIR` | No | `%ProgramData%\KeyGenRMS` | Local state folder |
+| `KEYGEN_PRIMARY_LOG` | No | `generated_keys.txt` under the data folder | Main generated-key log |
 
-يتضمن البناء إعدادات التشغيل المحلية غير السرية الممكنة فقط. تأتي تفاصيل
-PostgreSQL وجميع بيانات tokens، بما فيها الأسماء والأسرار، من `.env` المحلي
-أثناء التشغيل/التثبيت.
+Executables embed only non-sensitive local behavior defaults. PostgreSQL
+connection information and all token data, including product names and
+secrets, come from private `.env` files during installation and operation.
 
-## التخزين المحلي
+## Local Storage
 
-| الملف | يكتبه | الاستخدام |
+| File | Written by | Purpose |
 | --- | --- | --- |
-| `generated_keys.txt` | خدمة Rust | سجل نصي لكل مفتاح مولد |
-| `netcache.dat` | خدمة Rust | سجل إضافي محلي |
-| `pending_uploads.json` | خدمة Rust | طابور السجلات قيد الرفع |
-| `uploaded.log` | خدمة Rust | أثر نجاح الرفع |
-| `AUTHORIZED.txt` | خدمة Rust | التفويض الأولي |
-| `MAINTENANCE.txt` | خدمة Rust | حالة الإيقاف المستلمة |
+| `generated_keys.txt` | Rust service | Text record for each generated key |
+| `netcache.dat` | Rust service | Additional local log |
+| `pending_uploads.json` | Rust service | Records waiting for PostgreSQL upload |
+| `uploaded.log` | Rust service | Trace of completed uploads |
+| `AUTHORIZED.txt` | Rust service | Initial authorization marker |
+| `MAINTENANCE.txt` | Rust service | Last received disabled state |
 
-كل عنصر في الطابور يحتوي `sync_id` لمنع إدخال العملية نفسها مرتين عند إعادة
-محاولة المزامنة.
+Each queued record has a `sync_id` so a repeated synchronization attempt does
+not insert the same operation twice.
 
-## عقد PostgreSQL
+## PostgreSQL Contract
 
-### جدول الحالة
+### Status table
 
 ```sql
 CREATE TABLE IF NOT EXISTS server_control (
@@ -148,13 +150,13 @@ VALUES (1, '1')
 ON CONFLICT (id) DO NOTHING;
 ```
 
-تقرأ خدمة Rust:
+The Rust service reads:
 
 ```sql
 SELECT status FROM server_control WHERE id = 1;
 ```
 
-### جدول السجلات
+### Activation-log table
 
 ```sql
 CREATE TABLE IF NOT EXISTS activation_logs (
@@ -167,7 +169,7 @@ CREATE TABLE IF NOT EXISTS activation_logs (
 );
 ```
 
-تزامن خدمة Rust:
+The Rust service synchronizes records with:
 
 ```sql
 INSERT INTO activation_logs
@@ -176,28 +178,31 @@ VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT DO NOTHING;
 ```
 
-`ON CONFLICT DO NOTHING` يدعم إعادة المحاولة سواء كان القيد الفريد الأصلي
-أو الفهرس الجزئي على `sync_id` موجودا في قاعدة تمت ترقيتها.
+`ON CONFLICT DO NOTHING` supports idempotent retries for databases that have
+either the original unique constraint or the migration-created partial index
+on `sync_id`.
 
-## واجهة FastAPI المحلية
+## Local FastAPI Dashboard
 
-العنوان الافتراضي:
+Default address:
 
 ```text
 http://127.0.0.1:8080
 ```
 
-| المسار | الطلب | النتيجة |
+| Route | Request | Result |
 | --- | --- | --- |
-| `/` | `GET` | صفحة المتصفح |
-| `/health` | `GET` | حالة تشغيل الموقع |
-| `/api/status` | `GET` | `{"status":"1"}` أو `{"status":"0"}` |
-| `/api/status` | `PUT {"status":"0"}` | تغيير حالة التحكم |
-| `/api/activation-logs?limit=100` | `GET` | أحدث سجلات PostgreSQL |
-| `/api/activation-logs/{id}` | `DELETE` | حذف سجل مفتاح واحد من PostgreSQL |
+| `/` | `GET` | Browser dashboard page |
+| `/health` | `GET` | Dashboard process status |
+| `/api/status` | `GET` | `{"status":"1"}` or `{"status":"0"}` |
+| `/api/status` | `PUT {"status":"0"}` | Updates generator-control status |
+| `/api/activation-logs?limit=100` | `GET` | Latest uploaded records |
+| `/api/activation-logs/{id}` | `DELETE` | Deletes one uploaded record |
 
-قيمة `limit` من `1` إلى `500`. ترفض اللوحة الاتصالات غير المحلية افتراضيا
-ما لم يضبط `ADMIN_WEB_ALLOW_REMOTE=1`، وهو إعداد لا ينصح به دون حماية إضافية.
+`limit` accepts values from `1` to `500`. By default the dashboard rejects
+non-loopback requests unless `ADMIN_WEB_ALLOW_REMOTE=1` is explicitly set;
+remote use is not recommended without additional security.
 
-تستدعي الصفحة طلب `DELETE` فقط بعد تأكيدين متتاليين في المتصفح. يحتاج حساب
-قاعدة بيانات لوحة الإدارة صلاحية `DELETE` على جدول `activation_logs`.
+The browser page issues `DELETE` only after two consecutive confirmation
+dialogs. The dashboard database account needs `DELETE` permission on
+`activation_logs` if record deletion is required.
