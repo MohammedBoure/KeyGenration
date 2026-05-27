@@ -504,10 +504,15 @@ mod gui {
         );
         UpdateWindow(controls.status);
         match install_service() {
-            Ok(_) => set_text(
+            Ok(_) if wait_for_local_service() => set_text(
                 controls.status,
                 "Pret. Saisissez l'identifiant puis generez la cle.",
             ),
+            Ok(_) => {
+                let error = "Service installe mais indisponible; verifiez la connexion et l'etat PostgreSQL.";
+                set_text(controls.status, error);
+                message_box(window, "Service indisponible", error);
+            }
             Err(error) => {
                 set_text(controls.status, &error);
                 message_box(window, "Installation impossible", &error);
@@ -578,7 +583,7 @@ mod gui {
     }
 
     fn wait_for_local_service() -> bool {
-        for _ in 0..4 {
+        for _ in 0..8 {
             if local_service_ready().is_ok() {
                 return true;
             }

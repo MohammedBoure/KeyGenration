@@ -14,6 +14,8 @@ Native Windows Rust interface and NSSM installer.
   `KeyGenService.exe --authorize-install`; installation proceeds only when
   PostgreSQL is reachable and `server_control.status` is `1`.
 - Requests administrator permission only after that authorization succeeds.
+- Reports the generator as ready only after the installed local service answers
+  its health check.
 - Once installed, sends generation requests to the local service at
   `http://127.0.0.1:45632/generate_key`.
 
