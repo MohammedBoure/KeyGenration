@@ -45,26 +45,46 @@ impl DatabaseConfig {
         match self.ssl_mode.trim().to_ascii_lowercase().as_str() {
             "disable" => {
                 config.ssl_mode(SslMode::Disable);
-                Ok(config.connect(NoTls)?)
+                config
+                    .connect(NoTls)
+                    .map_err(|error| self.connection_error(&error).into())
             }
             "require" => {
                 config.ssl_mode(SslMode::Require);
                 let mut tls = TlsConnector::builder();
                 // PostgreSQL sslmode=require encrypts transport without validating its certificate.
                 tls.danger_accept_invalid_certs(true);
-                Ok(config.connect(MakeTlsConnector::new(tls.build()?))?)
+                let tls = tls.build()?;
+                config
+                    .connect(MakeTlsConnector::new(tls))
+                    .map_err(|error| self.connection_error(&error).into())
             }
             "verify-full" => {
                 config.ssl_mode(SslMode::Require);
-                Ok(config.connect(MakeTlsConnector::new(TlsConnector::new()?))?)
+                let tls = TlsConnector::new()?;
+                config
+                    .connect(MakeTlsConnector::new(tls))
+                    .map_err(|error| self.connection_error(&error).into())
             }
             _ => Err("PGSSLMODE must be disable, require, or verify-full.".into()),
         }
     }
 
+    fn connection_error(&self, error: &dyn std::error::Error) -> String {
+        let details = error_chain(error);
+        format!(
+            "Connexion PostgreSQL impossible vers {}:{} apres {}s. Verifiez Internet, PGHOST/PGPORT, le pare-feu et que le serveur PostgreSQL accepte les connexions. Detail: {details}",
+            self.host,
+            self.port,
+            self.connect_timeout.as_secs()
+        )
+    }
+
     pub(crate) fn read_status(&self) -> AppResult<String> {
         let mut client = self.connect()?;
-        let row = client.query_opt("SELECT status FROM server_control WHERE id = 1", &[])?;
+        let row = client
+            .query_opt("SELECT status FROM server_control WHERE id = 1", &[])
+            .map_err(|error| format!("Lecture du statut PostgreSQL impossible: {error}"))?;
         row.map(|record| record.get::<_, String>(0))
             .ok_or_else(|| "The server_control status row is missing.".into())
     }
@@ -96,4 +116,41 @@ fn seconds_from_environment(
             .and_then(|value| value.parse().ok())
             .unwrap_or(default),
     )
+}
+
+fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut details = error.to_string();
+    let mut source = error.source();
+    while let Some(error) = source {
+        details.push_str(": ");
+        details.push_str(&error.to_string());
+        source = error.source();
+    }
+    details
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connection_errors_include_target_and_timeout() {
+        let config = DatabaseConfig {
+            host: "database.example.test".to_owned(),
+            port: 5432,
+            database: "keygen".to_owned(),
+            user: "client".to_owned(),
+            password: "secret".to_owned(),
+            ssl_mode: "require".to_owned(),
+            connect_timeout: Duration::from_secs(7),
+        };
+
+        let error = std::io::Error::new(std::io::ErrorKind::TimedOut, "connection timed out");
+        let message = config.connection_error(&error);
+
+        assert!(message.contains("database.example.test:5432"));
+        assert!(message.contains("apres 7s"));
+        assert!(message.contains("connection timed out"));
+        assert!(!message.contains("secret"));
+    }
 }
