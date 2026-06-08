@@ -38,6 +38,20 @@ GET  http://127.0.0.1:45632/health
 POST http://127.0.0.1:45632/generate_key
 ```
 
+## Developer Offline Key Command
+
+For development or emergency support only, the backend can generate a key from
+the local `.env` without contacting PostgreSQL and without writing local logs:
+
+```powershell
+cd .\dist\windows\ActivateurRMS
+.\KeyGenService\KeyGenService.exe --dev-generate-key --app-type Jewelry --request-code 2DF9-3CF4-A810
+```
+
+The command prints only the activation key. Keep this command for trusted
+developers; normal operators should use `ActivateurRMS.exe` so generation is
+controlled and logged.
+
 ## Configuration
 
 On the managed computer, a `.env` beside the desktop executable supplies the

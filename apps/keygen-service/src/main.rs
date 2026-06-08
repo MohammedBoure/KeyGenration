@@ -4,6 +4,7 @@ mod http;
 mod storage;
 
 use database::DatabaseConfig;
+use generation::{generate_activation_key, valid_request_code};
 use http::handle_request;
 use keygen_common::{GenerationToken, RuntimeEnvironment};
 use std::env;
@@ -19,10 +20,8 @@ use storage::{
 };
 use tiny_http::Server;
 
-#[cfg(test)]
-use generation::{generate_activation_key, valid_request_code};
-
 const DEFAULT_LISTEN_ADDRESS: &str = "127.0.0.1:45632";
+const DEV_GENERATE_KEY_FLAG: &str = "--dev-generate-key";
 
 type AppResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -202,7 +201,14 @@ impl AppState {
 
 fn main() -> AppResult<()> {
     let environment = RuntimeEnvironment::load()?;
-    if env::args().any(|argument| argument == "--authorize-install") {
+    let arguments = env::args().skip(1).collect::<Vec<_>>();
+    if run_developer_key_command(&arguments, &environment)? {
+        return Ok(());
+    }
+    if arguments
+        .iter()
+        .any(|argument| argument == "--authorize-install")
+    {
         Config::from_environment(&environment)?
             .database
             .require_active_installation()?;
@@ -229,6 +235,50 @@ fn main() -> AppResult<()> {
         handle_request(request, &state);
     }
     Ok(())
+}
+
+fn run_developer_key_command(
+    arguments: &[String],
+    environment: &RuntimeEnvironment,
+) -> AppResult<bool> {
+    if !arguments
+        .iter()
+        .any(|argument| argument == DEV_GENERATE_KEY_FLAG)
+    {
+        return Ok(false);
+    }
+    let request_code = required_cli_option(arguments, "--request-code")?;
+    let app_type = required_cli_option(arguments, "--app-type")?;
+    let tokens = environment.generation_tokens()?;
+    let activation_key = developer_key(&request_code, &app_type, &tokens)?;
+    println!("{activation_key}");
+    Ok(true)
+}
+
+fn required_cli_option(arguments: &[String], name: &str) -> AppResult<String> {
+    let mut values = arguments
+        .windows(2)
+        .filter_map(|pair| (pair[0] == name).then(|| pair[1].clone()));
+    let Some(value) = values.next() else {
+        return Err(format!("Missing {name}.").into());
+    };
+    if values.next().is_some() {
+        return Err(format!("Duplicate {name}.").into());
+    }
+    Ok(value)
+}
+
+fn developer_key(
+    request_code: &str,
+    app_type: &str,
+    tokens: &[GenerationToken],
+) -> AppResult<String> {
+    let request_code = request_code.trim().to_ascii_uppercase();
+    if !valid_request_code(&request_code) {
+        return Err("Invalid request code format. Expected XXXX-XXXX-XXXX.".into());
+    }
+    generate_activation_key(&request_code, app_type, tokens)
+        .ok_or_else(|| format!("Unknown app type: {app_type}.").into())
 }
 
 fn spawn_remote_controller(state: Arc<AppState>) {
@@ -299,5 +349,41 @@ mod tests {
     fn validates_request_format() {
         assert!(valid_request_code("F81A-67A7-C6AA"));
         assert!(!valid_request_code("F81A67A7C6AA"));
+    }
+
+    #[test]
+    fn developer_key_command_generates_without_database_or_logging() {
+        let tokens = vec![GenerationToken {
+            id: "JEWELRY".to_owned(),
+            name: "Jewelry".to_owned(),
+            secret: "JewelryManagement".to_owned(),
+        }];
+
+        let key = developer_key("2df9-3cf4-a810", "Jewelry", &tokens).unwrap();
+
+        assert_eq!(key, "9BD1-121D-EBF6-017F");
+    }
+
+    #[test]
+    fn cli_option_parser_rejects_missing_or_duplicate_options() {
+        let arguments = vec![
+            DEV_GENERATE_KEY_FLAG.to_owned(),
+            "--request-code".to_owned(),
+            "F81A-67A7-C6AA".to_owned(),
+        ];
+
+        assert_eq!(
+            required_cli_option(&arguments, "--request-code").unwrap(),
+            "F81A-67A7-C6AA"
+        );
+        assert!(required_cli_option(&arguments, "--app-type").is_err());
+
+        let duplicate = vec![
+            "--app-type".to_owned(),
+            "Jewelry".to_owned(),
+            "--app-type".to_owned(),
+            "Lab".to_owned(),
+        ];
+        assert!(required_cli_option(&duplicate, "--app-type").is_err());
     }
 }
